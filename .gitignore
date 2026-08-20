@@ -1,0 +1,47 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Go
+/bin/
+*.exe
+*.test
+
+# Java
+target/
+*.class
+*.jar
+!gradle-wrapper.jar
+
+# PHP
+vendor/
+composer.phar
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Model weights / large artifacts
+*.pt
+*.onnx
+*.pth
+
+# Logs
+*.log

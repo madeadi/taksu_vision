@@ -1,0 +1,8 @@
+numpy==2.4.6
+opencv_python_headless==5.0.0.93
+zxing_cpp==3.0.0
+easyocr==1.7.2
+ocrmac==1.0.1; sys_platform == "darwin"
+Pillow==12.3.0
+fastapi==0.115.6
+uvicorn[standard]==0.32.1

@@ -3,3 +3,4 @@ workspace
 image_crops/*.jpg
 image_crops/output.json
 read_qr_ocr/output.json
+input_imgs/*
