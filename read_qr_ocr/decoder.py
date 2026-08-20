@@ -124,6 +124,15 @@ def load_crop_entries(crop_paths) -> list[CropEntry]:
         if image is None:
             print(f"WARNING: could not read {crop_path}")
             continue
+
+        # Crops are always persisted as JPEG, even if the source file was a
+        # different accepted format (e.g. .png/.bmp).
+        if crop_path.suffix.lower() not in (".jpg", ".jpeg"):
+            jpg_path = crop_path.with_suffix(".jpg")
+            cv2.imwrite(str(jpg_path), image, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            crop_path.unlink()
+            crop_path = jpg_path
+
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
         entries.append(
             {
