@@ -40,13 +40,22 @@ Returns a list of dicts, one per input path, in the same order as
   "image": "/abs/path/to/image_crops/image2_box0.jpg",
   "image_name": "image2_box0.jpg",
   "text": "NB26-12345,BR,A24,AAA",
+  "input_tokens": 263,
+  "output_tokens": 13,
+  "cost_usd": 0.0000318,
   "error": null
 }
 ```
 
 A per-image failure (unreadable file, API error, ...) never raises — it's
-captured in that image's `error` field (with `text: null`) so one bad image
-doesn't abort the rest of the batch.
+captured in that image's `error` field (with `text`, `input_tokens`,
+`output_tokens`, `cost_usd` all `null`) so one bad image doesn't abort the
+rest of the batch.
+
+`cost_usd` is computed from `ocr.MODEL_PRICING`, a hardcoded USD-per-1M-token
+table for `gemini-2.5-flash-lite`/`-flash`/`-pro` (standard, non-batch
+pricing — see [ai.google.dev/gemini-api/docs/pricing](https://ai.google.dev/gemini-api/docs/pricing)).
+It's `null` if `model` isn't in that table.
 
 ## HTTP API
 
@@ -103,11 +112,17 @@ Response shape:
         "image": "/abs/path/to/image_crops/image2_box0.jpg",
         "image_name": "image2_box0.jpg",
         "text": "NB26-12345,BR,A24,AAA",
+        "input_tokens": 263,
+        "output_tokens": 13,
+        "cost_usd": 0.0000318,
         "error": null
       }
     ],
     "n_processed": 1,
-    "n_failed": 0
+    "n_failed": 0,
+    "total_input_tokens": 263,
+    "total_output_tokens": 13,
+    "total_cost_usd": 0.0000318
   },
   "start_at": "2026-08-20T09:35:11.714928+00:00",
   "finished_at": "2026-08-20T09:35:12.702391+00:00",

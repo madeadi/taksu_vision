@@ -103,6 +103,12 @@ async def ocr(
         output_data["results"] = results
         output_data["n_processed"] = sum(1 for r in results if r["error"] is None)
         output_data["n_failed"] = sum(1 for r in results if r["error"] is not None)
+        output_data["total_input_tokens"] = sum(r["input_tokens"] or 0 for r in results)
+        output_data["total_output_tokens"] = sum(r["output_tokens"] or 0 for r in results)
+        # Sums costs of images that have one; None only if none do (e.g. every
+        # image failed, or `model` isn't in ocr.MODEL_PRICING).
+        known_costs = [r["cost_usd"] for r in results if r["cost_usd"] is not None]
+        output_data["total_cost_usd"] = sum(known_costs) if known_costs else None
     except Exception as exc:
         success = False
         error = str(exc)

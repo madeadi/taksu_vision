@@ -10,17 +10,21 @@ INPUT_DIR="$WORKSPACE/input_imgs"
 
 IMAGE_CROPS_DIR="$REPO_ROOT/image_crops"
 READ_QR_OCR_DIR="$REPO_ROOT/read_qr_ocr"
+GEMINI_OCR_DIR="$REPO_ROOT/gemini_ocr"
 
 IMAGE_CROPS_PORT="${IMAGE_CROPS_PORT:-8818}"
 READ_QR_OCR_PORT="${READ_QR_OCR_PORT:-8819}"
+GEMINI_OCR_PORT="${GEMINI_OCR_PORT:-8820}"
 
 IMAGE_CROPS_URL="http://127.0.0.1:${IMAGE_CROPS_PORT}"
 READ_QR_OCR_URL="http://127.0.0.1:${READ_QR_OCR_PORT}"
+GEMINI_OCR_URL="http://127.0.0.1:${GEMINI_OCR_PORT}"
 
 CONFIDENCE="${CONFIDENCE:-0.25}"
 PAD_RATIO="${PAD_RATIO:-0.15}"
 UPSCALE="${UPSCALE:-3.0}"
 RUN_OCR="${RUN_OCR:-true}"
+RUN_GEMINI_OCR="${RUN_GEMINI_OCR:-true}"
 
 pids=()
 cleanup() {
@@ -61,5 +65,20 @@ echo "==> starting read_qr_ocr server on :$READ_QR_OCR_PORT"
 pids+=($!)
 wait_for_health "$READ_QR_OCR_URL" "read_qr_ocr"
 
-echo "==> servers up: image_crops ($IMAGE_CROPS_URL), read_qr_ocr ($READ_QR_OCR_URL)"
+if [[ "$RUN_GEMINI_OCR" == "true" ]]; then
+  if [[ -z "${GEMINI_API_KEY:-}" && -z "${GOOGLE_API_KEY:-}" ]]; then
+    echo "error: RUN_GEMINI_OCR=true but GEMINI_API_KEY (or GOOGLE_API_KEY) is not set" >&2
+    exit 1
+  fi
+  echo "==> starting gemini_ocr server on :$GEMINI_OCR_PORT"
+  (
+    cd "$GEMINI_OCR_DIR"
+    exec .venv/bin/uvicorn server:app --host 127.0.0.1 --port "$GEMINI_OCR_PORT" \
+      >"$WORKSPACE/gemini_ocr.log" 2>&1
+  ) &
+  pids+=($!)
+  wait_for_health "$GEMINI_OCR_URL" "gemini_ocr"
+fi
+
+echo "==> servers up: image_crops ($IMAGE_CROPS_URL), read_qr_ocr ($READ_QR_OCR_URL)$([[ "$RUN_GEMINI_OCR" == "true" ]] && echo ", gemini_ocr ($GEMINI_OCR_URL)")"
 wait
