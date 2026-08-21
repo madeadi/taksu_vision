@@ -5,3 +5,5 @@ image_crops/output.json
 read_qr_ocr/output.json
 input_imgs/*
 gemini_ocr/*
+*.json
+*.jpg
