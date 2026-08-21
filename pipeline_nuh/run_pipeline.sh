@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Runs the image_crops -> read_qr_ocr pipeline over every image in input_imgs/,
-# writing results into this directory's image_crops/ and read_qr_ocr/ subfolders.
+# Runs the detect_boxes -> crop_boxes -> read_qr_ocr pipeline over every image
+# in input_imgs/, writing results into this directory's subfolders.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,17 +8,20 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKSPACE="$SCRIPT_DIR"
 INPUT_DIR="$WORKSPACE/input_imgs"
 
-IMAGE_CROPS_DIR="$REPO_ROOT/image_crops"
+DETECT_BOXES_DIR="$REPO_ROOT/detect_boxes"
+CROP_BOXES_DIR="$REPO_ROOT/crop_boxes"
 READ_QR_OCR_DIR="$REPO_ROOT/read_qr_ocr"
 GEMINI_OCR_DIR="$REPO_ROOT/gemini_ocr"
 
-IMAGE_CROPS_PORT="${IMAGE_CROPS_PORT:-8818}"
 READ_QR_OCR_PORT="${READ_QR_OCR_PORT:-8819}"
 GEMINI_OCR_PORT="${GEMINI_OCR_PORT:-8820}"
+DETECT_BOXES_PORT="${DETECT_BOXES_PORT:-8821}"
+CROP_BOXES_PORT="${CROP_BOXES_PORT:-8822}"
 
-IMAGE_CROPS_URL="http://127.0.0.1:${IMAGE_CROPS_PORT}"
 READ_QR_OCR_URL="http://127.0.0.1:${READ_QR_OCR_PORT}"
 GEMINI_OCR_URL="http://127.0.0.1:${GEMINI_OCR_PORT}"
+DETECT_BOXES_URL="http://127.0.0.1:${DETECT_BOXES_PORT}"
+CROP_BOXES_URL="http://127.0.0.1:${CROP_BOXES_PORT}"
 
 CONFIDENCE="${CONFIDENCE:-0.25}"
 PAD_RATIO="${PAD_RATIO:-0.15}"
@@ -46,15 +49,24 @@ wait_for_health() {
   exit 1
 }
 
-echo "==> starting image_crops server on :$IMAGE_CROPS_PORT"
+echo "==> starting detect_boxes server on :$DETECT_BOXES_PORT"
 (
-  cd "$IMAGE_CROPS_DIR"
-  MODEL_PATH="$IMAGE_CROPS_DIR/weight.pt" \
-    exec .venv/bin/uvicorn server:app --host 127.0.0.1 --port "$IMAGE_CROPS_PORT" \
-    >"$WORKSPACE/image_crops.log" 2>&1
+  cd "$DETECT_BOXES_DIR"
+  MODEL_PATH="$DETECT_BOXES_DIR/weight.pt" \
+    exec .venv/bin/uvicorn server:app --host 127.0.0.1 --port "$DETECT_BOXES_PORT" \
+    >"$WORKSPACE/detect_boxes.log" 2>&1
 ) &
 pids+=($!)
-wait_for_health "$IMAGE_CROPS_URL" "image_crops"
+wait_for_health "$DETECT_BOXES_URL" "detect_boxes"
+
+echo "==> starting crop_boxes server on :$CROP_BOXES_PORT"
+(
+  cd "$CROP_BOXES_DIR"
+  exec .venv/bin/uvicorn server:app --host 127.0.0.1 --port "$CROP_BOXES_PORT" \
+    >"$WORKSPACE/crop_boxes.log" 2>&1
+) &
+pids+=($!)
+wait_for_health "$CROP_BOXES_URL" "crop_boxes"
 
 echo "==> starting read_qr_ocr server on :$READ_QR_OCR_PORT"
 (
@@ -80,5 +92,5 @@ if [[ "$RUN_GEMINI_OCR" == "true" ]]; then
   wait_for_health "$GEMINI_OCR_URL" "gemini_ocr"
 fi
 
-echo "==> servers up: image_crops ($IMAGE_CROPS_URL), read_qr_ocr ($READ_QR_OCR_URL)$([[ "$RUN_GEMINI_OCR" == "true" ]] && echo ", gemini_ocr ($GEMINI_OCR_URL)")"
+echo "==> servers up: detect_boxes ($DETECT_BOXES_URL), crop_boxes ($CROP_BOXES_URL), read_qr_ocr ($READ_QR_OCR_URL)$([[ "$RUN_GEMINI_OCR" == "true" ]] && echo ", gemini_ocr ($GEMINI_OCR_URL)")"
 wait

@@ -1,7 +1,7 @@
 Every service shall:
 1. Do a specific task
 2. Pure service without side effects
-3. Receive workspace so that it can save results to disk
+3. `json_output_path`: in which the service will also write the json response to this
 
 Service shall implements the following endpoints:
 - GET /health

@@ -15,7 +15,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 
 from decoder import OCR_ENGINES, decode_crops, load_crop_entries, ocr_failed_crops
 from result import serializable_results
@@ -62,12 +62,21 @@ async def decode(
     crops_dir: str = Query(
         ..., description="Server-local directory of already-cropped, already-straightened images to decode."
     ),
-    workspace: str | None = Query(
+    filenames: list[str] | None = Body(
+        None,
+        embed=True,
+        description=(
+            "Optional JSON body {\"filenames\": [...]} of file names (within crops_dir) to "
+            "restrict decoding to. If omitted, every image file in crops_dir is processed."
+        ),
+    ),
+    json_output_path: str | None = Query(
         None,
         description=(
-            "Root folder to write results into. output.json is written to "
-            "'{workspace}/read_qr_ocr/'. If omitted, falls back to the server's "
-            "SAVE_RESULTS_DIR env var; if neither is set, results aren't saved to disk."
+            "Full path to write the response JSON to. If omitted, falls back to the "
+            "server's SAVE_RESULTS_DIR env var (writing to "
+            "'{SAVE_RESULTS_DIR}/read_qr_ocr/output.json'); if neither is set, "
+            "results aren't saved to disk."
         ),
     ),
     upscale: float = Query(
@@ -92,16 +101,32 @@ async def decode(
     if not source_dir.is_dir():
         raise HTTPException(400, f"crops_dir not found or not a directory: {crops_dir!r}")
 
-    crop_paths = sorted(p for p in source_dir.iterdir() if p.suffix.lower() in IMG_EXTS)
+    if filenames:
+        resolved_source = source_dir.resolve()
+        crop_paths = []
+        for name in filenames:
+            candidate = (source_dir / name).resolve()
+            # parent must be exactly source_dir: rejects path separators/traversal (e.g. "../x").
+            if candidate.parent != resolved_source or not candidate.is_file():
+                raise HTTPException(400, f"filenames entry not found in crops_dir: {name!r}")
+            crop_paths.append(candidate)
+    else:
+        crop_paths = sorted(p for p in source_dir.iterdir() if p.suffix.lower() in IMG_EXTS)
     if not crop_paths:
         raise HTTPException(400, f"No image files found in crops_dir: {crops_dir!r}")
 
-    # `workspace`, when given, wins over the server's fixed SAVE_RESULTS_DIR.
-    save_results_dir = Path(workspace) / "read_qr_ocr" if workspace else SAVE_RESULTS_DIR
+    # `json_output_path`, when given, wins over the server's fixed SAVE_RESULTS_DIR.
+    if json_output_path:
+        output_path = Path(json_output_path)
+    elif SAVE_RESULTS_DIR:
+        output_path = SAVE_RESULTS_DIR / "read_qr_ocr" / "output.json"
+    else:
+        output_path = None
 
     input_data = {
         "crops_dir": crops_dir,
-        "workspace": workspace,
+        "filenames": filenames,
+        "json_output_path": json_output_path,
         "upscale": upscale,
         "run_ocr": run_ocr,
         "ocr_preprocess": ocr_preprocess,
@@ -137,9 +162,9 @@ async def decode(
     if error is not None:
         result["error"] = error
 
-    if save_results_dir:
-        save_results_dir.mkdir(parents=True, exist_ok=True)
-        with open(save_results_dir / "output.json", "w") as output_file:
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as output_file:
             json.dump(result, output_file, indent=2)
 
     return result

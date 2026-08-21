@@ -1,37 +1,12 @@
-"""Crop geometry for axis-aligned and oriented detections."""
+"""Crop geometry for axis-aligned and oriented boxes — no YOLO dependency."""
 
 from __future__ import annotations
 
+import time
+from pathlib import Path
+
 import cv2
 import numpy as np
-
-
-def axis_aligned_envelope(points: np.ndarray) -> list[float]:
-    """Return the legacy xyxy envelope around four corner points."""
-    quad = np.asarray(points, dtype=np.float32).reshape(4, 2)
-    return [
-        float(quad[:, 0].min()),
-        float(quad[:, 1].min()),
-        float(quad[:, 0].max()),
-        float(quad[:, 1].max()),
-    ]
-
-
-def axis_aligned_crop(
-    image: np.ndarray,
-    xyxy: list[float],
-    pad_ratio: float = 0.15,
-) -> np.ndarray:
-    """Crop a legacy xyxy detection with proportional padding."""
-    height, width = image.shape[:2]
-    x1, y1, x2, y2 = xyxy
-    box_width, box_height = x2 - x1, y2 - y1
-    pad_x, pad_y = box_width * pad_ratio, box_height * pad_ratio
-    left = max(0, int(x1 - pad_x))
-    top = max(0, int(y1 - pad_y))
-    right = min(width, int(x2 + pad_x))
-    bottom = min(height, int(y2 + pad_y))
-    return image[top:bottom, left:right]
 
 
 def order_quad_points(points: np.ndarray) -> np.ndarray:
@@ -57,6 +32,23 @@ def expand_quad(
     expanded[:, 0] = np.clip(expanded[:, 0], 0, max(0, width - 1))
     expanded[:, 1] = np.clip(expanded[:, 1], 0, max(0, height - 1))
     return expanded.astype(np.float32)
+
+
+def axis_aligned_crop(
+    image: np.ndarray,
+    xyxy: list[float],
+    pad_ratio: float = 0.15,
+) -> np.ndarray:
+    """Crop an axis-aligned xyxy box with proportional padding."""
+    height, width = image.shape[:2]
+    x1, y1, x2, y2 = xyxy
+    box_width, box_height = x2 - x1, y2 - y1
+    pad_x, pad_y = box_width * pad_ratio, box_height * pad_ratio
+    left = max(0, int(x1 - pad_x))
+    top = max(0, int(y1 - pad_y))
+    right = min(width, int(x2 + pad_x))
+    bottom = min(height, int(y2 + pad_y))
+    return image[top:bottom, left:right]
 
 
 def rectify_obb_crop(
@@ -143,3 +135,82 @@ def normalize_label_direction(crop: np.ndarray) -> tuple[np.ndarray, int, float]
     if right_score > left_score and margin >= 0.08:
         return cv2.rotate(crop, cv2.ROTATE_180), 180, margin
     return crop, 0, margin
+
+
+def crop_boxes(
+    image_path,
+    boxes,
+    pad_ratio,
+    save_crops_dir,
+    timing=None,
+):
+    """Crop `boxes` out of the image at `image_path`.
+
+    Each item in `boxes` is a dict with `"box_index"`, `"is_obb"`, and either
+    `"xyxy"` (plain boxes) or `"polygon"` (OBB boxes, as 4 `[x, y]` corners —
+    any ordering, they're re-ordered internally). This is exactly the shape
+    `../detect_boxes`'s `POST /tasks` returns per box, so its `output.boxes`
+    (or `output.images[i].boxes`) can be passed straight through.
+
+    OBB boxes are perspective-rectified via `rectify_obb_crop` and
+    orientation-normalized via `normalize_label_direction`; plain boxes are
+    padded-and-cropped via `axis_aligned_crop` with no rotation/orientation
+    logic, since there's no angle info.
+
+    If `timing` is a dict, accumulates `crop_seconds`/`crop_count` (time
+    spent rectifying/padding + saving each box) into it.
+
+    Returns a list of per-box dicts: `{"box_index", "is_obb", "crop_path",
+    "layout_angle", "layout_margin"}`. `crop_path` is `None` if
+    `save_crops_dir` is falsy. Boxes producing an empty crop (e.g. a
+    degenerate/too-small OBB) are skipped entirely.
+    """
+    image_path = Path(image_path)
+    image = cv2.imread(str(image_path))
+    if image is None:
+        raise ValueError(f"could not read image: {image_path}")
+
+    if save_crops_dir:
+        save_crops_dir = Path(save_crops_dir)
+        save_crops_dir.mkdir(parents=True, exist_ok=True)
+
+    entries = []
+    for box in boxes:
+        crop_start = time.perf_counter()
+        index = box["box_index"]
+        is_obb = box.get("is_obb", False)
+
+        if is_obb:
+            points = np.asarray(box["polygon"], dtype=np.float32)
+            crop = rectify_obb_crop(image, points, pad_ratio=pad_ratio)
+            crop, layout_angle, layout_margin = normalize_label_direction(crop)
+        else:
+            crop = axis_aligned_crop(image, box["xyxy"], pad_ratio=pad_ratio)
+            layout_angle, layout_margin = 0, 0.0
+
+        if crop.size == 0:
+            continue
+
+        crop_path = None
+        if save_crops_dir:
+            crop_name = f"{image_path.stem}_box{index}.jpg"
+            crop_path = save_crops_dir / crop_name
+            cv2.imwrite(str(crop_path), crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
+
+        if timing is not None:
+            timing["crop_seconds"] = (
+                timing.get("crop_seconds", 0.0) + time.perf_counter() - crop_start
+            )
+            timing["crop_count"] = timing.get("crop_count", 0) + 1
+
+        entries.append(
+            {
+                "box_index": index,
+                "is_obb": is_obb,
+                "crop_path": str(crop_path) if crop_path else None,
+                "layout_angle": layout_angle,
+                "layout_margin": round(layout_margin, 3),
+            }
+        )
+
+    return entries
