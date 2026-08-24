@@ -1,11 +1,13 @@
 // split_pdf HTTP microservice: splits a server-local PDF into single-page
 // PDF files. Stateless — no model to keep warm. Mirrors the request/response
 // conventions used by ../crop_boxes and ../detect_boxes (GET /health,
-// POST /tasks with query-param paths and a JSON envelope response), but as a
-// plain net/http server since this service is Go, not Python/FastAPI.
+// POST /tasks with query-param paths and a JSON envelope response). Routed
+// through huma (https://huma.rocks), like ../core, so the API is
+// self-documenting: GET /docs (Swagger UI) and GET /openapi.json.
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,6 +16,9 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
 )
 
 type taskInput struct {
@@ -39,51 +44,52 @@ type taskResult struct {
 	Error      string     `json:"error,omitempty"`
 }
 
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+// --- health ---
+
+type HealthOutput struct {
+	Body struct {
+		Status string `json:"status" example:"ok"`
+	}
 }
 
-func tasksHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+func healthHandler(ctx context.Context, input *struct{}) (*HealthOutput, error) {
+	resp := &HealthOutput{}
+	resp.Body.Status = "ok"
+	return resp, nil
+}
 
-	query := r.URL.Query()
-	workspaceID := query.Get("workspace_id")
-	pdfPath := query.Get("pdf_path")
-	pagesOutDir := query.Get("pages_out_dir")
-	jsonOutputPath := query.Get("json_output_path")
+// --- split (POST /tasks) ---
 
-	if workspaceID == "" {
-		http.Error(w, "workspace_id is required", http.StatusBadRequest)
-		return
-	}
-	if pdfPath == "" {
-		http.Error(w, "pdf_path is required", http.StatusBadRequest)
-		return
-	}
-	if pagesOutDir == "" {
-		http.Error(w, "pages_out_dir is required", http.StatusBadRequest)
-		return
-	}
+type TasksInput struct {
+	WorkspaceID    string `query:"workspace_id" required:"true" doc:"Workspace to read/write files in."`
+	PDFPath        string `query:"pdf_path" required:"true" doc:"Path (relative to the workspace) of the PDF to split."`
+	PagesOutDir    string `query:"pages_out_dir" required:"true" doc:"Directory (relative to the workspace) to write single-page PDFs into. Created (with parents) if it doesn't exist."`
+	JSONOutputPath string `query:"json_output_path" doc:"Path (relative to the workspace) to write the response JSON to. If omitted, the response isn't written to disk."`
+}
+
+type TasksOutput struct {
+	Body taskResult
+}
+
+func tasksHandler(ctx context.Context, input *TasksInput) (*TasksOutput, error) {
+	workspaceID := input.WorkspaceID
+	pdfPath := input.PDFPath
+	pagesOutDir := input.PagesOutDir
+	jsonOutputPath := input.JSONOutputPath
 
 	resolvedPDFPath, err := resolveWorkspacePath(workspaceRoot, workspaceID, pdfPath, true)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return nil, huma.Error400BadRequest(err.Error())
 	}
 	resolvedPagesOutDir, err := resolveWorkspacePath(workspaceRoot, workspaceID, pagesOutDir, false)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return nil, huma.Error400BadRequest(err.Error())
 	}
 	var resolvedJSONOutputPath string
 	if jsonOutputPath != "" {
 		resolvedJSONOutputPath, err = resolveWorkspacePath(workspaceRoot, workspaceID, jsonOutputPath, false)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
+			return nil, huma.Error400BadRequest(err.Error())
 		}
 	}
 
@@ -99,8 +105,7 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 	// WORKSPACE_ROOT sits behind a symlink, e.g. macOS's /tmp -> /private/tmp).
 	filesRoot, err := resolveWorkspacePath(workspaceRoot, workspaceID, "", false)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return nil, huma.Error400BadRequest(err.Error())
 	}
 	for i := range pages {
 		if rel, err := filepath.Rel(filesRoot, pages[i].PagePath); err == nil {
@@ -135,13 +140,8 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, result)
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	resp := &TasksOutput{Body: result}
+	return resp, nil
 }
 
 func writeJSONFile(path string, v any) error {
@@ -171,11 +171,31 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", healthHandler)
-	mux.HandleFunc("/tasks", tasksHandler)
+	config := huma.DefaultConfig("Taksu Vision split_pdf", "1.0.0")
+	config.Info.Description = "Splits a workspace-relative PDF into single-page PDF files."
+	// Match ../core's docs renderer so /docs looks and behaves the same
+	// across every huma-based service in this repo.
+	config.DocsRenderer = huma.DocsRendererSwaggerUI
+	api := humago.New(mux, config)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "health",
+		Method:      http.MethodGet,
+		Path:        "/health",
+		Summary:     "Health check",
+		Tags:        []string{"health"},
+	}, healthHandler)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "split-pdf",
+		Method:      http.MethodPost,
+		Path:        "/tasks",
+		Summary:     "Split a PDF into single-page PDFs",
+		Tags:        []string{"tasks"},
+	}, tasksHandler)
 
 	addr := fmt.Sprintf("%s:%d", *host, *port)
-	log.Printf("split_pdf listening on %s", addr)
+	log.Printf("split_pdf listening on %s (docs at /docs)", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatal(err)
 	}

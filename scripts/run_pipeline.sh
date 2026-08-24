@@ -100,7 +100,7 @@ wait_for_health "$DETECT_BOXES_URL" "detect_boxes"
 echo "==> starting crop_boxes server on :$CROP_BOXES_PORT"
 (
   cd "$CROP_BOXES_DIR"
-  exec .venv/bin/uvicorn server:app --host 127.0.0.1 --port "$CROP_BOXES_PORT" \
+  exec go run . --host 127.0.0.1 --port "$CROP_BOXES_PORT" \
     >"$WORKSPACE/crop_boxes.log" 2>&1
 ) &
 pids+=($!)
@@ -123,7 +123,7 @@ if [[ "$RUN_GEMINI_OCR" == "true" ]]; then
   echo "==> starting gemini_ocr server on :$GEMINI_OCR_PORT"
   (
     cd "$GEMINI_OCR_DIR"
-    exec .venv/bin/uvicorn server:app --host 127.0.0.1 --port "$GEMINI_OCR_PORT" \
+    exec go run . --host 127.0.0.1 --port "$GEMINI_OCR_PORT" \
       >"$WORKSPACE/gemini_ocr.log" 2>&1
   ) &
   pids+=($!)

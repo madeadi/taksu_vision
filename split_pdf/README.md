@@ -13,10 +13,13 @@ go build -o split_pdf .
 
 ## HTTP API
 
-Plain `net/http` server (this service is Go, not Python/FastAPI like the
-other services here) — but the request/response conventions mirror
-`../crop_boxes` and `../detect_boxes`: `GET /health`, `POST /tasks` with
-server-local paths as query params, and the same JSON envelope shape.
+Request/response conventions mirror `../crop_boxes` and `../detect_boxes`:
+`GET /health`, `POST /tasks` with server-local paths as query params, and
+the same JSON envelope shape. Built on [huma](https://huma.rocks) over the
+stdlib `net/http` mux, like `../core`, so the API is self-documenting —
+interactive docs at `GET /docs` (Swagger UI) and the raw spec at
+`GET /openapi.json`, both generated from the Go input/output structs in
+`main.go` rather than hand-maintained.
 
 ### Running
 
@@ -26,6 +29,9 @@ WORKSPACE_ROOT=/path/to/shared/storage ./split_pdf --host 0.0.0.0 --port 8823
 
 `WORKSPACE_ROOT` is required (same shared-disk path as `../core` and every
 other service) — the server refuses to start without it.
+
+Swagger UI / interactive docs at `/docs` (OpenAPI schema at
+`/openapi.json`).
 
 ### `GET /health`
 
@@ -54,10 +60,13 @@ Example request:
 POST /tasks?workspace_id=550e8400-e29b-41d4-a716-446655440000&pdf_path=document.pdf&pages_out_dir=pages&json_output_path=pages/output.json
 ```
 
-Response shape:
+Response shape (huma adds the `$schema` field to every JSON response,
+pointing at that response's generated JSON Schema; the file written to
+`json_output_path`, below, does not include it):
 
 ```jsonc
 {
+  "$schema": "http://localhost:8823/schemas/TaskResult.json",
   "input": {
     "workspace_id": "550e8400-e29b-41d4-a716-446655440000",
     "pdf_path": "document.pdf",
@@ -85,8 +94,9 @@ provided; otherwise it's only returned in the HTTP response, not saved to
 disk. `page_path` (and every other path field) is workspace-relative, so it
 can be fed straight into the next service's `/tasks` call.
 
-`workspace_id` missing/unknown, `pdf_path`/`pages_out_dir` missing/empty, a
-path escaping the workspace, or `pdf_path` not found return `400` before any
-splitting is attempted. Failures during splitting itself (e.g. a malformed
-PDF) are reported as `success: false` with an `error` message in the
-response body (HTTP status is still `200`).
+`workspace_id`, `pdf_path`, or `pages_out_dir` missing or empty return `422`
+(huma's standard request-validation response) before any splitting is
+attempted. A `workspace_id` that doesn't exist, a path escaping the
+workspace, or a `pdf_path` not found within it return `400`. Failures during
+splitting itself (e.g. a malformed PDF) are reported as `success: false`
+with an `error` message in the response body (HTTP status is still `200`).

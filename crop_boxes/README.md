@@ -1,66 +1,71 @@
 # crop_boxes
 
-Crop extraction from pre-detected boxes, as a standalone package. Given an
+Crop extraction from pre-detected boxes, as a standalone Go package. Given an
 image and a list of boxes (axis-aligned `xyxy` or oriented `polygon`
 corners), it produces upright, padded crops ready for downstream barcode
 decoding or OCR. No detection — see `../detect_boxes` for that, and no
 shared code with it (this package has its own copy of anything it needs).
 
+Pure Go — no cgo, no OpenCV. The handful of image operations the geometry
+needs (perspective warp, 90°/180° rotate, Sobel gradient, grayscale
+conversion) are hand-implemented in `image.go` instead of binding to a native
+CV library.
+
 ## Setup
 
-Requires Python 3.11 or 3.12.
+Requires Go 1.25+.
 
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+go build -o crop_boxes .
 ```
 
 ## API
 
-Defined in `cropper.py` (there is no package `__init__.py`):
+Defined in `cropper.go`:
 
 | Name | Description |
 | --- | --- |
-| `crop_boxes` | Crops a list of boxes out of one image and (optionally) saves the crop files |
-| `rectify_obb_crop` | Perspective-warps an oriented quad into an upright crop |
-| `normalize_label_direction` | Flips a horizontal crop 180° if needed, using a detail-gradient heuristic |
-| `axis_aligned_crop` | Pads and crops an axis-aligned `xyxy` box |
-| `order_quad_points` | Orders a quad's corners as top-left, top-right, bottom-right, bottom-left |
-| `expand_quad` | Expands a quad around its center by a padding ratio, clamped to image bounds |
+| `CropBoxes` | Crops a list of boxes out of one image and (optionally) saves the crop files |
+| `rectifyOBBCrop` | Perspective-warps an oriented quad into an upright crop |
+| `normalizeLabelDirection` | Flips a horizontal crop 180° if needed, using a detail-gradient heuristic |
+| `axisAlignedCrop` | Pads and crops an axis-aligned `xyxy` box |
+| `orderQuadPoints` | Orders a quad's corners as top-left, top-right, bottom-right, bottom-left |
+| `expandQuad` | Expands a quad around its center by a padding ratio, clamped to image bounds |
 
-### `crop_boxes(image_path, boxes, pad_ratio, save_crops_dir, timing=None)`
+### `CropBoxes(imagePath string, boxes []Box, padRatio float64, saveCropsDir string) ([]CropEntry, error)`
 
-Each item in `boxes` is `{"box_index", "is_obb", "xyxy", "polygon"}` — the
-same shape `../detect_boxes`'s `POST /tasks` returns per box, so its
-`output.boxes` can be passed straight through.
+Each item in `boxes` is `{BoxIndex, IsOBB, XYXY, Polygon}` — the same shape
+`../detect_boxes`'s `POST /tasks` returns per box, so its `output.boxes` can
+be passed straight through.
 
-1. **OBB case** (`is_obb: true`): perspective-warps the quad's 4 corner
-   points (`polygon`) into an upright rectangular crop (`rectify_obb_crop`),
-   then runs `normalize_label_direction` to flip it 180° if needed so the
-   dense Data Matrix end lands on the left.
-2. **Plain case** (`is_obb: false`): pads and crops the axis-aligned `xyxy`
-   box (`axis_aligned_crop`); no rotation/orientation logic since there's no
+1. **OBB case** (`IsOBB: true`): perspective-warps the quad's 4 corner points
+   (`Polygon`) into an upright rectangular crop (`rectifyOBBCrop`), then runs
+   `normalizeLabelDirection` to flip it 180° if needed so the dense Data
+   Matrix end lands on the left.
+2. **Plain case** (`IsOBB: false`): pads and crops the axis-aligned `XYXY`
+   box (`axisAlignedCrop`); no rotation/orientation logic since there's no
    angle info.
 3. Skips the box entirely if the resulting crop is empty (e.g. a
    degenerate/too-small OBB).
-4. Optionally saves the crop to `save_crops_dir` as
-   `{image_stem}_box{index}.jpg` if requested.
+4. Saves the crop to `saveCropsDir` (if non-empty) as
+   `{image_stem}_box{index}.jpg`.
 
-Returns a list of per-box dicts: `{"box_index", "is_obb", "crop_path",
-"layout_angle", "layout_margin"}`. `crop_path` is `None` if `save_crops_dir`
-is falsy.
+Returns a list of per-box `CropEntry` values: `{BoxIndex, IsOBB, CropPath,
+LayoutAngle, LayoutMargin}`. `CropPath` is `nil` if `saveCropsDir` is empty.
 
 ## HTTP API
 
-`server.py` exposes `crop_boxes` as a FastAPI microservice ("Crop Boxes" in
-Swagger UI). Stateless — no model to keep warm, so there's no startup cost.
-Crop-only — no detection, no barcode decoding, no OCR.
+`main.go` exposes `CropBoxes` as an HTTP microservice ("Taksu Vision
+crop_boxes" in Swagger UI), built on [huma](https://huma.rocks) like
+`../core` and `../split_pdf`, so the API is self-documenting — interactive
+docs at `GET /docs` and the raw spec at `GET /openapi.json`. Stateless — no
+model to keep warm, so there's no startup cost. Crop-only — no detection, no
+barcode decoding, no OCR.
 
 ### Running
 
 ```bash
-WORKSPACE_ROOT=/path/to/shared/storage uvicorn server:app --host 0.0.0.0 --port 8820
+WORKSPACE_ROOT=/path/to/shared/storage ./crop_boxes --host 0.0.0.0 --port 8822
 ```
 
 `WORKSPACE_ROOT` is required (same shared-disk path as `../core` and every
@@ -130,8 +135,8 @@ Response shape:
     ],
     "crops_dir": "crops"
   },
-  "start_at": "2026-08-21T09:35:11.714928+00:00",
-  "finished_at": "2026-08-21T09:35:11.802391+00:00",
+  "start_at": "2026-08-21T09:35:11.714928Z",
+  "finished_at": "2026-08-21T09:35:11.802391Z",
   "success": true
   // "error": "..."  // present only when success is false
 }

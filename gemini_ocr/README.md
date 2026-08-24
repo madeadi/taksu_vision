@@ -1,17 +1,18 @@
 # gemini_ocr
 
 OCR for already-cropped, already-straightened images via the Gemini API, as
-a standalone package. Takes crop *files* on disk as input (e.g. the crops
-written by `../image_crops`'s `POST /tasks`) — this package does no
-detection or geometry correction of its own, just OCR, using Gemini 2.5
-Flash-Lite by default.
+a standalone Go package. Takes crop *files* on disk as input (e.g. the crops
+written by `../crop_boxes`'s `POST /tasks`) — this package does no detection
+or geometry correction of its own, just OCR, using Gemini 2.5 Flash-Lite by
+default. Built on Google's official [`google.golang.org/genai`](https://pkg.go.dev/google.golang.org/genai)
+SDK — a thin HTTP client around the Gemini API, no local model.
 
 ## Setup
 
+Requires Go 1.25+.
+
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+go build -o gemini_ocr .
 ```
 
 Requires a Gemini API key with access to the Gemini API (see
@@ -21,23 +22,22 @@ Requires a Gemini API key with access to the Gemini API (see
 
 | Name | From | Description |
 | --- | --- | --- |
-| `ocr_images` | `ocr.py` | OCRs a list of image files with Gemini, in parallel, returning one result dict per image |
-| `IMG_EXTS` | `ocr.py` | Set of recognized image file extensions |
-| `DEFAULT_PROMPT` | `ocr.py` | Default OCR prompt sent alongside each image |
+| `ocrImages` | `ocr.go` | OCRs a list of image files with Gemini, in parallel, returning one result per image |
+| `imgExts` | `ocr.go` | Set of recognized image file extensions |
+| `defaultPrompt` | `ocr.go` | Default OCR prompt sent alongside each image |
 
-### `ocr_images(client, image_paths, model, prompt=DEFAULT_PROMPT, max_concurrency=4)`
+### `ocrImages(ctx, client, imagePaths []string, model, prompt string, maxConcurrency int) []OCRResult`
 
-For each path in `image_paths`, reads the file's bytes and sends them to
-Gemini (`client.models.generate_content`) alongside `prompt`, asking for
-the text visible in the image. Requests run in parallel via a thread pool
-(`max_concurrency` workers) since each call is a network-bound API request.
+For each path in `imagePaths`, reads the file's bytes and sends them to
+Gemini (`client.Models.GenerateContent`) alongside `prompt`, asking for the
+text visible in the image. Requests run in parallel, bounded by
+`maxConcurrency` goroutines, since each call is a network-bound API request.
 
-Returns a list of dicts, one per input path, in the same order as
-`image_paths`:
+Returns one `OCRResult` per input path, in the same order as `imagePaths`:
 
 ```jsonc
 {
-  "image": "/abs/path/to/image_crops/image2_box0.jpg",
+  "image": "/abs/path/to/crops/image2_box0.jpg",
   "image_name": "image2_box0.jpg",
   "text": "NB26-12345,BR,A24,AAA",
   "input_tokens": 263,
@@ -47,27 +47,28 @@ Returns a list of dicts, one per input path, in the same order as
 }
 ```
 
-A per-image failure (unreadable file, API error, ...) never raises — it's
-captured in that image's `error` field (with `text`, `input_tokens`,
-`output_tokens`, `cost_usd` all `null`) so one bad image doesn't abort the
-rest of the batch.
+A per-image failure (unreadable file, API error, ...) never aborts the
+batch — it's captured in that image's `error` field (with `text`,
+`input_tokens`, `output_tokens`, `cost_usd` all `null`).
 
-`cost_usd` is computed from `ocr.MODEL_PRICING`, a hardcoded USD-per-1M-token
-table for `gemini-2.5-flash-lite`/`-flash`/`-pro` (standard, non-batch
-pricing — see [ai.google.dev/gemini-api/docs/pricing](https://ai.google.dev/gemini-api/docs/pricing)).
+`cost_usd` is computed from `ocr.go`'s `modelPricing`, a hardcoded
+USD-per-1M-token table for `gemini-2.5-flash-lite`/`-flash`/`-pro` (standard,
+non-batch pricing — see [ai.google.dev/gemini-api/docs/pricing](https://ai.google.dev/gemini-api/docs/pricing)).
 It's `null` if `model` isn't in that table.
 
 ## HTTP API
 
-`server.py` exposes this as a FastAPI microservice ("Gemini OCR" in Swagger
-UI). There's no model to keep warm (the Gemini client just wraps HTTP calls
-to Google's API), so unlike `image_crops`/`pipeline_nuh` there's no startup
-model-load step.
+`main.go` exposes this as an HTTP microservice ("Gemini OCR" in Swagger UI),
+built on [huma](https://huma.rocks) like `../core` and `../split_pdf`, so the
+API is self-documenting — interactive docs at `GET /docs` and the raw spec
+at `GET /openapi.json`. There's no model to keep warm (the Gemini client
+just wraps HTTP calls to Google's API), so there's no startup model-load
+step.
 
 ### Running
 
 ```bash
-GEMINI_API_KEY=... WORKSPACE_ROOT=/path/to/shared/storage .venv/bin/uvicorn server:app --host 0.0.0.0 --port 8820
+GEMINI_API_KEY=... WORKSPACE_ROOT=/path/to/shared/storage ./gemini_ocr --host 0.0.0.0 --port 8820
 ```
 
 `WORKSPACE_ROOT` is required (same shared-disk path as `../core` and every
@@ -102,8 +103,12 @@ created (and files uploaded into them) via `../core` (see
 | `images_dir` | yes | — | Directory (relative to the workspace) of already-cropped images to OCR. |
 | `json_output_path` | no | — | Path (relative to the workspace) to write the response JSON to. If omitted, falls back to `SAVE_RESULTS_DIR`. |
 | `model` | no | `GEMINI_MODEL` | Gemini model to OCR with (e.g. `gemini-2.5-flash-lite`, `gemini-2.5-flash`, `gemini-2.5-pro`). |
-| `prompt` | no | `DEFAULT_PROMPT` | Prompt sent alongside each image. |
+| `prompt` | no | built-in default prompt | Prompt sent alongside each image. |
 | `max_concurrency` | no | `MAX_CONCURRENCY` | Max number of Gemini requests to run in parallel. |
+
+The request body is an optional JSON object `{"filenames": [...]}` (file
+names within `images_dir` to restrict OCR to). If omitted, every image file
+in `images_dir` is processed.
 
 Response shape:
 
@@ -111,6 +116,7 @@ Response shape:
 {
   "input": {
     "images_dir": "image_crops",
+    "filenames": null,
     "json_output_path": null,
     "model": "gemini-2.5-flash-lite",
     "prompt": "Read all text visible in this image. ...",
@@ -134,10 +140,9 @@ Response shape:
     "total_output_tokens": 13,
     "total_cost_usd": 0.0000318
   },
-  "start_at": "2026-08-20T09:35:11.714928+00:00",
-  "finished_at": "2026-08-20T09:35:12.702391+00:00",
+  "start_at": "2026-08-20T09:35:11.714928Z",
+  "finished_at": "2026-08-20T09:35:12.702391Z",
   "success": true
-  // "error": "..."  // present only when the whole batch call itself failed
 }
 ```
 

@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -68,6 +69,7 @@ func main() {
 	config.DocsRenderer = huma.DocsRendererSwaggerUI
 	api := humago.New(mux, config)
 	srv.registerRoutes(api)
+	mux.HandleFunc("/", indexHandler(otherServices()))
 
 	addr := fmt.Sprintf("%s:%d", *host, *port)
 	log.Printf("core listening on %s (WORKSPACE_ROOT=%s, ttl=%s, docs at /docs)", addr, workspaceRoot, ttl)
@@ -86,6 +88,93 @@ func envInt(name string, def int) int {
 		log.Fatalf("%s must be an integer, got %q", name, v)
 	}
 	return n
+}
+
+// service describes one other pipeline service for the index page. DocsURL
+// is empty for a service with no generated OpenAPI docs — the index page
+// falls back to linking its health check instead. Every current service
+// has docs (huma for the Go ones, FastAPI for the Python ones), but the
+// fallback stays in place for any future service that doesn't.
+type service struct {
+	Name    string
+	BaseURL string
+	DocsURL string
+}
+
+// otherServices reads each pipeline service's base URL from an env var
+// (SPLIT_PDF_URL, DETECT_BOXES_URL, ...), defaulting to the localhost ports
+// scripts/run_pipeline.sh starts them on. Override these when the services
+// aren't all on localhost (e.g. one per container).
+func otherServices() []service {
+	svc := func(name, envVar, defaultURL string, hasDocs bool) service {
+		base := os.Getenv(envVar)
+		if base == "" {
+			base = defaultURL
+		}
+		s := service{Name: name, BaseURL: base}
+		if hasDocs {
+			s.DocsURL = base + "/docs"
+		}
+		return s
+	}
+	return []service{
+		svc("split_pdf", "SPLIT_PDF_URL", "http://localhost:8823", true),
+		svc("detect_boxes", "DETECT_BOXES_URL", "http://localhost:8821", true),
+		svc("crop_boxes", "CROP_BOXES_URL", "http://localhost:8822", true),
+		svc("read_qr_ocr", "READ_QR_OCR_URL", "http://localhost:8819", true),
+		svc("gemini_ocr", "GEMINI_OCR_URL", "http://localhost:8820", true),
+	}
+}
+
+const indexHTMLTemplate = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Taksu Vision Core</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 4rem auto; line-height: 1.5; color: #1a1a1a; }
+h1 { font-size: 1.25rem; }
+h2 { font-size: 1rem; margin-top: 2rem; }
+a { color: #2563eb; }
+ul { padding-left: 1.25rem; }
+</style>
+</head>
+<body>
+<h1>Taksu Vision Core</h1>
+<p>Workspace lifecycle service. Links to every pipeline service's API docs below.</p>
+
+<h2>core (this service)</h2>
+<ul>
+<li><a href="/docs">API docs (Swagger UI)</a></li>
+<li><a href="/openapi.json">OpenAPI spec</a></li>
+<li><a href="/health">Health check</a></li>
+</ul>
+
+<h2>Pipeline services</h2>
+<ul>
+%s</ul>
+</body>
+</html>
+`
+
+func indexHandler(services []service) http.HandlerFunc {
+	var items strings.Builder
+	for _, s := range services {
+		if s.DocsURL != "" {
+			fmt.Fprintf(&items, "<li><strong>%s</strong> — <a href=\"%s\">API docs</a></li>\n", s.Name, s.DocsURL)
+		} else {
+			fmt.Fprintf(&items, "<li><strong>%s</strong> — no OpenAPI docs (plain <code>POST /tasks</code>); <a href=\"%s/health\">health</a></li>\n", s.Name, s.BaseURL)
+		}
+	}
+	page := fmt.Sprintf(indexHTMLTemplate, items.String())
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, page)
+	}
 }
 
 func (s *server) registerRoutes(api huma.API) {
