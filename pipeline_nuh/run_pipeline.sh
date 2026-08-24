@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Runs the detect_boxes -> crop_boxes -> read_qr_ocr pipeline over every image
-# in input_imgs/, writing results into this directory's subfolders.
+# Starts the split_pdf -> detect_boxes -> crop_boxes -> read_qr_ocr services
+# used by the pipeline. Each is a standalone HTTP server; this script only
+# starts them and health-checks them (no per-image orchestration) — callers
+# hit their /tasks endpoints directly.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,16 +10,30 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKSPACE="$SCRIPT_DIR"
 INPUT_DIR="$WORKSPACE/input_imgs"
 
+# Shared workspace root: every service below reads/writes workspace files
+# directly under here (workspace_id + relative path), so this must be set
+# identically on every service process. `core` owns creating/uploading
+# into/downloading from/deleting the workspaces that live here.
+WORKSPACE_ROOT="${WORKSPACE_ROOT:-$WORKSPACE/workspaces}"
+mkdir -p "$WORKSPACE_ROOT"
+export WORKSPACE_ROOT
+
+CORE_DIR="$REPO_ROOT/core"
+SPLIT_PDF_DIR="$REPO_ROOT/split_pdf"
 DETECT_BOXES_DIR="$REPO_ROOT/detect_boxes"
 CROP_BOXES_DIR="$REPO_ROOT/crop_boxes"
 READ_QR_OCR_DIR="$REPO_ROOT/read_qr_ocr"
 GEMINI_OCR_DIR="$REPO_ROOT/gemini_ocr"
 
+CORE_PORT="${CORE_PORT:-8824}"
+SPLIT_PDF_PORT="${SPLIT_PDF_PORT:-8823}"
 READ_QR_OCR_PORT="${READ_QR_OCR_PORT:-8819}"
 GEMINI_OCR_PORT="${GEMINI_OCR_PORT:-8820}"
 DETECT_BOXES_PORT="${DETECT_BOXES_PORT:-8821}"
 CROP_BOXES_PORT="${CROP_BOXES_PORT:-8822}"
 
+CORE_URL="http://127.0.0.1:${CORE_PORT}"
+SPLIT_PDF_URL="http://127.0.0.1:${SPLIT_PDF_PORT}"
 READ_QR_OCR_URL="http://127.0.0.1:${READ_QR_OCR_PORT}"
 GEMINI_OCR_URL="http://127.0.0.1:${GEMINI_OCR_PORT}"
 DETECT_BOXES_URL="http://127.0.0.1:${DETECT_BOXES_PORT}"
@@ -48,6 +64,24 @@ wait_for_health() {
   echo "error: $name did not become healthy at $url" >&2
   exit 1
 }
+
+echo "==> starting core server on :$CORE_PORT"
+(
+  cd "$CORE_DIR"
+  exec go run . --host 127.0.0.1 --port "$CORE_PORT" \
+    >"$WORKSPACE/core.log" 2>&1
+) &
+pids+=($!)
+wait_for_health "$CORE_URL" "core"
+
+echo "==> starting split_pdf server on :$SPLIT_PDF_PORT"
+(
+  cd "$SPLIT_PDF_DIR"
+  exec go run . --host 127.0.0.1 --port "$SPLIT_PDF_PORT" \
+    >"$WORKSPACE/split_pdf.log" 2>&1
+) &
+pids+=($!)
+wait_for_health "$SPLIT_PDF_URL" "split_pdf"
 
 echo "==> starting detect_boxes server on :$DETECT_BOXES_PORT"
 (
@@ -92,5 +126,6 @@ if [[ "$RUN_GEMINI_OCR" == "true" ]]; then
   wait_for_health "$GEMINI_OCR_URL" "gemini_ocr"
 fi
 
-echo "==> servers up: detect_boxes ($DETECT_BOXES_URL), crop_boxes ($CROP_BOXES_URL), read_qr_ocr ($READ_QR_OCR_URL)$([[ "$RUN_GEMINI_OCR" == "true" ]] && echo ", gemini_ocr ($GEMINI_OCR_URL)")"
+echo "==> servers up: core ($CORE_URL), split_pdf ($SPLIT_PDF_URL), detect_boxes ($DETECT_BOXES_URL), crop_boxes ($CROP_BOXES_URL), read_qr_ocr ($READ_QR_OCR_URL)$([[ "$RUN_GEMINI_OCR" == "true" ]] && echo ", gemini_ocr ($GEMINI_OCR_URL)")"
+echo "==> WORKSPACE_ROOT: $WORKSPACE_ROOT"
 wait

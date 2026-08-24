@@ -67,8 +67,11 @@ model-load step.
 ### Running
 
 ```bash
-GEMINI_API_KEY=... .venv/bin/uvicorn server:app --host 0.0.0.0 --port 8820
+GEMINI_API_KEY=... WORKSPACE_ROOT=/path/to/shared/storage .venv/bin/uvicorn server:app --host 0.0.0.0 --port 8820
 ```
+
+`WORKSPACE_ROOT` is required (same shared-disk path as `../core` and every
+other service) — the server refuses to start without it.
 
 Swagger UI / interactive docs at `/docs`.
 
@@ -79,7 +82,8 @@ Swagger UI / interactive docs at `/docs`.
 | `GEMINI_API_KEY` | — | API key for the Gemini API. Required (falls back to `GOOGLE_API_KEY` if set instead); the server refuses to start without one. |
 | `GEMINI_MODEL` | `gemini-2.5-flash-lite` | Default Gemini model used for OCR. Overridable per-request via the `model` query param. |
 | `MAX_CONCURRENCY` | `4` | Default max number of Gemini requests run in parallel per `/tasks` call. Overridable per-request via the `max_concurrency` query param. |
-| `SAVE_RESULTS_DIR` | unset | Server-side fallback folder for `output.json` (written to `{SAVE_RESULTS_DIR}/gemini_ocr/output.json`), used when a request doesn't pass `json_output_path`. |
+| `WORKSPACE_ROOT` | — | Shared-disk directory workspaces live under. Required — the server refuses to start without it. |
+| `SAVE_RESULTS_DIR` | `gemini_ocr/output.json` | Default workspace-relative path for `output.json`, used when a request doesn't pass `json_output_path`. |
 
 ### `GET /health`
 
@@ -87,10 +91,16 @@ Returns `{"status", "model", "save_results_dir"}`.
 
 ### `POST /tasks`
 
+`images_dir` and `json_output_path` are relative to the workspace, resolved
+against `$WORKSPACE_ROOT/{workspace_id}/files/`. Workspaces themselves are
+created (and files uploaded into them) via `../core` (see
+`../core/README.md`).
+
 | Query param | Required | Default | Description |
 | --- | --- | --- | --- |
-| `images_dir` | yes | — | Server-local directory of already-cropped images to OCR. |
-| `json_output_path` | no | — | Full path to write the response JSON to (parent dirs created if needed). Wins over `SAVE_RESULTS_DIR` when both are set; if neither is set, results aren't saved to disk. |
+| `workspace_id` | yes | — | Workspace to read/write files in. |
+| `images_dir` | yes | — | Directory (relative to the workspace) of already-cropped images to OCR. |
+| `json_output_path` | no | — | Path (relative to the workspace) to write the response JSON to. If omitted, falls back to `SAVE_RESULTS_DIR`. |
 | `model` | no | `GEMINI_MODEL` | Gemini model to OCR with (e.g. `gemini-2.5-flash-lite`, `gemini-2.5-flash`, `gemini-2.5-pro`). |
 | `prompt` | no | `DEFAULT_PROMPT` | Prompt sent alongside each image. |
 | `max_concurrency` | no | `MAX_CONCURRENCY` | Max number of Gemini requests to run in parallel. |
@@ -100,8 +110,8 @@ Response shape:
 ```jsonc
 {
   "input": {
-    "images_dir": "/abs/path/to/image_crops",
-    "json_output_path": "/abs/path/to/output.json",  // or null
+    "images_dir": "image_crops",
+    "json_output_path": null,
     "model": "gemini-2.5-flash-lite",
     "prompt": "Read all text visible in this image. ...",
     "max_concurrency": 4
@@ -109,7 +119,7 @@ Response shape:
   "output": {
     "results": [
       {
-        "image": "/abs/path/to/image_crops/image2_box0.jpg",
+        "image": "image_crops/image2_box0.jpg",
         "image_name": "image2_box0.jpg",
         "text": "NB26-12345,BR,A24,AAA",
         "input_tokens": 263,
@@ -131,5 +141,6 @@ Response shape:
 }
 ```
 
-If `json_output_path`/`SAVE_RESULTS_DIR` resolve to an output path, this same
-response body is also written there.
+This same response body is also written to `json_output_path` (or
+`SAVE_RESULTS_DIR` if `json_output_path` is omitted), workspace-relative
+like every other path field.

@@ -16,9 +16,11 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from ultralytics import YOLO
 
 from detector import IMG_EXTS, detect
+from workspace import resolve_workspace_path, workspace_root_from_env
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "weight.pt")
 DEVICE_ENV = os.environ.get("DEVICE")  # unset -> auto (mps on Apple Silicon, else cpu)
+WORKSPACE_ROOT = workspace_root_from_env()
 
 state: dict = {}
 
@@ -64,9 +66,10 @@ def health():
 
 @app.post("/tasks")
 async def run_detect(
+    workspace_id: str = Query(..., description="Workspace to read/write files in."),
     images_dir: str = Query(
-        ...,
-        description="Server-local directory of image files to detect.",
+        "",
+        description="Directory (relative to the workspace) of image files to detect. Empty = workspace root.",
     ),
     filenames: list[str] | None = Body(
         None,
@@ -79,7 +82,7 @@ async def run_detect(
     json_output_path: str | None = Query(
         None,
         description=(
-            "Full path to write the response JSON to. If omitted, the "
+            "Path (relative to the workspace) to write the response JSON to. If omitted, the "
             "response isn't written to disk — only returned in the HTTP response."
         ),
     ),
@@ -96,9 +99,15 @@ async def run_detect(
         ),
     ),
 ):
-    # Reads directly from server-local disk; caller is trusted to pass a
-    # path the server should be allowed to read (same trust level as json_output_path).
-    source_dir = Path(images_dir)
+    try:
+        source_dir = resolve_workspace_path(WORKSPACE_ROOT, workspace_id, images_dir, must_exist=True)
+        json_output_path_obj = (
+            resolve_workspace_path(WORKSPACE_ROOT, workspace_id, json_output_path)
+            if json_output_path
+            else None
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     if not source_dir.is_dir():
         raise HTTPException(400, f"images_dir not found or not a directory: {images_dir!r}")
 
@@ -176,8 +185,7 @@ async def run_detect(
     if error is not None:
         result["error"] = error
 
-    if json_output_path:
-        json_output_path_obj = Path(json_output_path)
+    if json_output_path_obj:
         json_output_path_obj.parent.mkdir(parents=True, exist_ok=True)
         with open(json_output_path_obj, "w") as output_file:
             json.dump(result, output_file, indent=2)

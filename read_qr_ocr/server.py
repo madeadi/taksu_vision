@@ -19,12 +19,12 @@ from fastapi import Body, FastAPI, HTTPException, Query
 
 from decoder import OCR_ENGINES, decode_crops, load_crop_entries, ocr_failed_crops
 from result import serializable_results
+from workspace import resolve_workspace_path, workspace_root_from_env
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
-# Fixed at startup rather than a request param: a client-supplied path fed into
-# cv2.imwrite (via decode_crops' orientation-correction rewrite) would be an
-# arbitrary-file-write vector.
-SAVE_RESULTS_DIR = Path(os.environ["SAVE_RESULTS_DIR"]) if os.environ.get("SAVE_RESULTS_DIR") else None
+WORKSPACE_ROOT = workspace_root_from_env()
+# Default workspace-relative json_output_path used when a request omits it.
+SAVE_RESULTS_DIR = os.environ.get("SAVE_RESULTS_DIR", "read_qr_ocr/output.json")
 
 # Default is easyocr, not ocrmac: ocrmac calls into Apple's Vision framework
 # (via PyObjC), which has been observed to SIGBUS-crash the whole process
@@ -53,14 +53,15 @@ app = FastAPI(
 def health():
     return {
         "status": "ok",
-        "save_results_dir": str(SAVE_RESULTS_DIR) if SAVE_RESULTS_DIR else None,
+        "save_results_dir": SAVE_RESULTS_DIR,
     }
 
 
 @app.post("/tasks")
 async def decode(
+    workspace_id: str = Query(..., description="Workspace to read/write files in."),
     crops_dir: str = Query(
-        ..., description="Server-local directory of already-cropped, already-straightened images to decode."
+        ..., description="Directory (relative to the workspace) of already-cropped, already-straightened images to decode."
     ),
     filenames: list[str] | None = Body(
         None,
@@ -73,10 +74,9 @@ async def decode(
     json_output_path: str | None = Query(
         None,
         description=(
-            "Full path to write the response JSON to. If omitted, falls back to the "
-            "server's SAVE_RESULTS_DIR env var (writing to "
-            "'{SAVE_RESULTS_DIR}/read_qr_ocr/output.json'); if neither is set, "
-            "results aren't saved to disk."
+            "Path (relative to the workspace) to write the response JSON to. If omitted, "
+            f"falls back to the server's SAVE_RESULTS_DIR env var (default '{SAVE_RESULTS_DIR}', "
+            "also relative to the workspace)."
         ),
     ),
     upscale: float = Query(
@@ -97,7 +97,15 @@ async def decode(
         3.0, description="When run_ocr and ocr_preprocess are true: the upscale factor applied before OCR."
     ),
 ):
-    source_dir = Path(crops_dir)
+    try:
+        source_dir = resolve_workspace_path(WORKSPACE_ROOT, workspace_id, crops_dir, must_exist=True)
+        workspace_files_dir = resolve_workspace_path(WORKSPACE_ROOT, workspace_id, "", must_exist=True)
+        # `json_output_path`, when given, wins over the server's SAVE_RESULTS_DIR default.
+        output_path = resolve_workspace_path(
+            WORKSPACE_ROOT, workspace_id, json_output_path or SAVE_RESULTS_DIR
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     if not source_dir.is_dir():
         raise HTTPException(400, f"crops_dir not found or not a directory: {crops_dir!r}")
 
@@ -114,14 +122,6 @@ async def decode(
         crop_paths = sorted(p for p in source_dir.iterdir() if p.suffix.lower() in IMG_EXTS)
     if not crop_paths:
         raise HTTPException(400, f"No image files found in crops_dir: {crops_dir!r}")
-
-    # `json_output_path`, when given, wins over the server's fixed SAVE_RESULTS_DIR.
-    if json_output_path:
-        output_path = Path(json_output_path)
-    elif SAVE_RESULTS_DIR:
-        output_path = SAVE_RESULTS_DIR / "read_qr_ocr" / "output.json"
-    else:
-        output_path = None
 
     input_data = {
         "crops_dir": crops_dir,
@@ -143,7 +143,11 @@ async def decode(
         decode_crops(entries, upscale_factor=upscale)
         if run_ocr:
             ocr_failed_crops(entries, engine=OCR_ENGINE, preprocess=ocr_preprocess, scale=ocr_scale)
-        output_data["boxes"] = serializable_results(entries)
+        results = serializable_results(entries)
+        for entry in results:
+            if entry.get("image"):
+                entry["image"] = str(Path(entry["image"]).relative_to(workspace_files_dir))
+        output_data["boxes"] = results
         output_data["n_decoded"] = sum(1 for entry in entries if entry["decoded"])
         output_data["n_ocr_read"] = sum(1 for entry in entries if entry["ocr"])
     except Exception as exc:

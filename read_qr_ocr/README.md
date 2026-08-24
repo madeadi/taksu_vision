@@ -81,8 +81,11 @@ model-load step.
 ### Running
 
 ```bash
-.venv/bin/uvicorn server:app --host 0.0.0.0 --port 8819
+WORKSPACE_ROOT=/path/to/shared/storage .venv/bin/uvicorn server:app --host 0.0.0.0 --port 8819
 ```
+
+`WORKSPACE_ROOT` is required (same shared-disk path as `../core` and every
+other service) — the server refuses to start without it.
 
 Swagger UI / interactive docs at `/docs`.
 
@@ -90,7 +93,8 @@ Swagger UI / interactive docs at `/docs`.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `SAVE_RESULTS_DIR` | unset | Server-side fallback folder for `output.json` (written to `{SAVE_RESULTS_DIR}/read_qr_ocr/output.json`), used when a request doesn't pass `json_output_path`. |
+| `WORKSPACE_ROOT` | — | Shared-disk directory workspaces live under. Required — the server refuses to start without it. |
+| `SAVE_RESULTS_DIR` | `read_qr_ocr/output.json` | Default workspace-relative path for `output.json`, used when a request doesn't pass `json_output_path`. |
 | `OCR_ENGINE` | `easyocr` | Which `OCR_ENGINES` entry to use when `run_ocr=true`. **Not `ocrmac` by default**: `ocrmac` calls Apple's Vision framework via PyObjC, which has been observed to `SIGBUS`-crash the whole server process (native `EXC_BAD_ACCESS` inside ImageIO's EXIF parsing) on some inputs — a crash Python can't catch. `easyocr` is pure PyTorch, so failures there surface as normal exceptions instead. Set to `ocrmac` only if you understand and accept that risk. |
 
 ### `GET /health`
@@ -99,10 +103,16 @@ Returns `{"status", "save_results_dir"}`.
 
 ### `POST /tasks`
 
+`crops_dir` and `json_output_path` are relative to the workspace, resolved
+against `$WORKSPACE_ROOT/{workspace_id}/files/`. Workspaces themselves are
+created (and files uploaded into them) via `../core` (see
+`../core/README.md`).
+
 | Query param | Required | Default | Description |
 | --- | --- | --- | --- |
-| `crops_dir` | yes | — | Server-local directory of already-cropped, already-straightened images to decode. |
-| `json_output_path` | no | — | Full path to write the response JSON to (parent dirs created if needed). Wins over `SAVE_RESULTS_DIR` when both are set; if neither is set, results aren't saved to disk. |
+| `workspace_id` | yes | — | Workspace to read/write files in. |
+| `crops_dir` | yes | — | Directory (relative to the workspace) of already-cropped, already-straightened images to decode. |
+| `json_output_path` | no | — | Path (relative to the workspace) to write the response JSON to. If omitted, falls back to `SAVE_RESULTS_DIR`. |
 | `upscale` | no | `3.0` | Upscale factor tried by the decode ensemble on difficult symbols. |
 | `run_ocr` | no | `false` | Run OCR (via `OCR_ENGINE`) on crops that fail barcode decode. Off by default — slower than barcode decode alone. |
 | `ocr_preprocess` | no | `true` | When `run_ocr` is true: upscale + CLAHE-enhance each crop before OCR. |
@@ -121,9 +131,9 @@ Response shape:
 ```jsonc
 {
   "input": {
-    "crops_dir": "/abs/path/to/image_crops",
+    "crops_dir": "image_crops",
     "filenames": null,  // or e.g. ["a.jpg", "b.jpg"]
-    "json_output_path": "/abs/path/to/output.json",  // or null
+    "json_output_path": null,
     "upscale": 3.0,
     "run_ocr": false,
     "ocr_preprocess": true,
@@ -132,7 +142,7 @@ Response shape:
   "output": {
     "boxes": [
       {
-        "image": "/abs/path/to/image_crops/image2_box0.jpg",
+        "image": "image_crops/image2_box0.jpg",
         "image_name": "image2_box0.jpg",
         "decoded": ["NB26-12345,BR,A24,AAA"],
         "decode_angle": 1,
@@ -156,5 +166,6 @@ Response shape:
 }
 ```
 
-If `json_output_path`/`SAVE_RESULTS_DIR` resolve to an output path, this same
-response body is also written there.
+This same response body is also written to `json_output_path` (or
+`SAVE_RESULTS_DIR` if `json_output_path` is omitted), workspace-relative
+like every other path field.

@@ -59,7 +59,7 @@ cold-start cost. Detection-only — no cropping, no barcode decoding, no OCR.
 ### Running
 
 ```bash
-MODEL_PATH=weight.pt uvicorn server:app --host 0.0.0.0 --port 8819
+MODEL_PATH=weight.pt WORKSPACE_ROOT=/path/to/shared/storage uvicorn server:app --host 0.0.0.0 --port 8819
 ```
 
 Swagger UI / interactive docs at `/docs` (OpenAPI schema at `/openapi.json`).
@@ -70,6 +70,7 @@ Swagger UI / interactive docs at `/docs` (OpenAPI schema at `/openapi.json`).
 | --- | --- | --- |
 | `MODEL_PATH` | `weight.pt` | Path to the YOLO model weights to load at startup. |
 | `DEVICE` | auto | Inference device (`cpu`, `mps`, `cuda:0`, ...). Unset auto-detects MPS on Apple Silicon, else CPU. |
+| `WORKSPACE_ROOT` | — | Shared-disk directory workspaces live under (same value as `../core` and every other service). Required — the server refuses to start without it. |
 
 ### `GET /health`
 
@@ -78,14 +79,17 @@ model loaded on.
 
 ### `POST /tasks`
 
-Reads every image in a server-local directory (no file upload —
-`images_dir` must be a path the server process can read) and returns each
-image's detected boxes.
+Reads every image in a directory inside the given workspace and returns each
+image's detected boxes. `images_dir` and `json_output_path` are relative to
+the workspace, resolved against `$WORKSPACE_ROOT/{workspace_id}/files/`.
+Workspaces themselves are created (and files uploaded into them) via
+`../core` (see `../core/README.md`).
 
 | Query param | Required | Default | Description |
 | --- | --- | --- | --- |
-| `images_dir` | yes | — | Server-local directory of image files to detect. |
-| `json_output_path` | no | — | Full path to write the response JSON to (parent dirs created if needed). If omitted, the response isn't written to disk — only returned in the HTTP response. |
+| `workspace_id` | yes | — | Workspace to read/write files in. |
+| `images_dir` | no | `""` (workspace root) | Directory (relative to the workspace) of image files to detect. |
+| `json_output_path` | no | — | Path (relative to the workspace) to write the response JSON to. If omitted, the response isn't written to disk — only returned in the HTTP response. |
 | `confidence` | no | `0.25` | YOLO detection confidence threshold (0-1). Boxes scoring below this are discarded. |
 | `blur_threshold` | no | `0.0` | Minimum Laplacian-variance sharpness score required to process the image. The whole image is skipped (counted in `n_skipped`) if its score falls below this. `0` (default) disables the check. |
 
@@ -102,10 +106,10 @@ Response shape:
 ```jsonc
 {
   "input": {
-    "images_dir": "/abs/path/to/images",
+    "images_dir": "images",
     "filenames": null,  // or e.g. ["a.jpg", "b.jpg"]
     "image_count": 1,
-    "json_output_path": "/abs/path/to/output.json",  // or null
+    "json_output_path": "output.json",  // or null
     "confidence": 0.25,
     "blur_threshold": 0.0
   },

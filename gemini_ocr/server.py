@@ -19,6 +19,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from google import genai
 
 from ocr import DEFAULT_PROMPT, IMG_EXTS, ocr_images
+from workspace import resolve_workspace_path, workspace_root_from_env
 
 API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 if not API_KEY:
@@ -26,9 +27,9 @@ if not API_KEY:
 
 DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
 DEFAULT_MAX_CONCURRENCY = int(os.environ.get("MAX_CONCURRENCY", "4"))
-# Fixed at startup rather than a request param: a client-supplied path fed into
-# open()/write would be an arbitrary-file-write vector.
-SAVE_RESULTS_DIR = Path(os.environ["SAVE_RESULTS_DIR"]) if os.environ.get("SAVE_RESULTS_DIR") else None
+WORKSPACE_ROOT = workspace_root_from_env()
+# Default workspace-relative json_output_path used when a request omits it.
+SAVE_RESULTS_DIR = os.environ.get("SAVE_RESULTS_DIR", "gemini_ocr/output.json")
 
 client = genai.Client(api_key=API_KEY)
 
@@ -49,14 +50,15 @@ def health():
     return {
         "status": "ok",
         "model": DEFAULT_MODEL,
-        "save_results_dir": str(SAVE_RESULTS_DIR) if SAVE_RESULTS_DIR else None,
+        "save_results_dir": SAVE_RESULTS_DIR,
     }
 
 
 @app.post("/tasks")
 async def ocr(
+    workspace_id: str = Query(..., description="Workspace to read/write files in."),
     images_dir: str = Query(
-        ..., description="Server-local directory of already-cropped images to OCR."
+        ..., description="Directory (relative to the workspace) of already-cropped images to OCR."
     ),
     filenames: list[str] | None = Body(
         None,
@@ -69,10 +71,9 @@ async def ocr(
     json_output_path: str | None = Query(
         None,
         description=(
-            "Full path to write the response JSON to. If omitted, falls back to the "
-            "server's SAVE_RESULTS_DIR env var (writing to "
-            "'{SAVE_RESULTS_DIR}/gemini_ocr/output.json'); if neither is set, "
-            "results aren't saved to disk."
+            "Path (relative to the workspace) to write the response JSON to. If omitted, "
+            f"falls back to the server's SAVE_RESULTS_DIR env var (default '{SAVE_RESULTS_DIR}', "
+            "also relative to the workspace)."
         ),
     ),
     model: str = Query(DEFAULT_MODEL, description="Gemini model to OCR with."),
@@ -81,7 +82,15 @@ async def ocr(
         DEFAULT_MAX_CONCURRENCY, description="Max number of Gemini requests to run in parallel."
     ),
 ):
-    source_dir = Path(images_dir)
+    try:
+        source_dir = resolve_workspace_path(WORKSPACE_ROOT, workspace_id, images_dir, must_exist=True)
+        workspace_files_dir = resolve_workspace_path(WORKSPACE_ROOT, workspace_id, "", must_exist=True)
+        # `json_output_path`, when given, wins over the server's SAVE_RESULTS_DIR default.
+        output_path = resolve_workspace_path(
+            WORKSPACE_ROOT, workspace_id, json_output_path or SAVE_RESULTS_DIR
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     if not source_dir.is_dir():
         raise HTTPException(400, f"images_dir not found or not a directory: {images_dir!r}")
 
@@ -98,14 +107,6 @@ async def ocr(
         image_paths = sorted(p for p in source_dir.iterdir() if p.suffix.lower() in IMG_EXTS)
     if not image_paths:
         raise HTTPException(400, f"No image files found in images_dir: {images_dir!r}")
-
-    # `json_output_path`, when given, wins over the server's fixed SAVE_RESULTS_DIR.
-    if json_output_path:
-        output_path = Path(json_output_path)
-    elif SAVE_RESULTS_DIR:
-        output_path = SAVE_RESULTS_DIR / "gemini_ocr" / "output.json"
-    else:
-        output_path = None
 
     input_data = {
         "images_dir": images_dir,
@@ -125,6 +126,9 @@ async def ocr(
         results = ocr_images(
             client, image_paths, model=model, prompt=prompt, max_concurrency=max_concurrency
         )
+        for entry in results:
+            if entry.get("image"):
+                entry["image"] = str(Path(entry["image"]).relative_to(workspace_files_dir))
         output_data["results"] = results
         output_data["n_processed"] = sum(1 for r in results if r["error"] is None)
         output_data["n_failed"] = sum(1 for r in results if r["error"] is not None)

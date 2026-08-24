@@ -60,8 +60,11 @@ Crop-only — no detection, no barcode decoding, no OCR.
 ### Running
 
 ```bash
-uvicorn server:app --host 0.0.0.0 --port 8820
+WORKSPACE_ROOT=/path/to/shared/storage uvicorn server:app --host 0.0.0.0 --port 8820
 ```
+
+`WORKSPACE_ROOT` is required (same shared-disk path as `../core` and every
+other service) — the server refuses to start without it.
 
 Swagger UI / interactive docs at `/docs` (OpenAPI schema at `/openapi.json`).
 
@@ -71,22 +74,26 @@ Returns `{"status": "ok"}`.
 
 ### `POST /tasks`
 
-Takes `image_path`, `pad_ratio`, `crops_out_dir`, and `json_output_path` as
-query params, and `boxes` as a raw JSON array request body (too complex a
-structure for a query param).
+Takes `workspace_id`, `image_path`, `pad_ratio`, `crops_out_dir`, and
+`json_output_path` as query params, and `boxes` as a raw JSON array request
+body (too complex a structure for a query param). Every path param is
+relative to the workspace, resolved against
+`$WORKSPACE_ROOT/{workspace_id}/files/`. Workspaces themselves are created
+(and files uploaded into them) via `../core` (see `../core/README.md`).
 
 | Param | Where | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `image_path` | query | yes | — | Server-local filesystem path to the image to crop from (no file upload). |
+| `workspace_id` | query | yes | — | Workspace to read/write files in. |
+| `image_path` | query | yes | — | Path (relative to the workspace) of the image to crop from. |
 | `pad_ratio` | query | no | `0.15` | Fractional margin added around each box before cropping (`0.15` = 15% padding). |
-| `crops_out_dir` | query | yes | — | Directory to write crop files into. Created (with parents) if it doesn't exist. |
-| `json_output_path` | query | no | — | Full path to write the response JSON to (parent dirs created if needed). If omitted, the response isn't written to disk — only returned in the HTTP response. |
+| `crops_out_dir` | query | yes | — | Directory (relative to the workspace) to write crop files into. Created (with parents) if it doesn't exist. |
+| `json_output_path` | query | no | — | Path (relative to the workspace) to write the response JSON to. If omitted, the response isn't written to disk — only returned in the HTTP response. |
 | `boxes` | body | yes | — | JSON array of boxes to crop: `{"box_index": int, "is_obb": bool, "xyxy": [x1,y1,x2,y2] or null, "polygon": [[x,y],...] or null}`. `xyxy` is required when `is_obb` is `false`; `polygon` (4 `[x, y]` corners, any order) is required when `is_obb` is `true`. |
 
 Example request:
 
 ```
-POST /tasks?image_path=/abs/path/to/image.jpeg&crops_out_dir=/abs/path/to/crops&json_output_path=/abs/path/to/crops/output.json&pad_ratio=0.15
+POST /tasks?workspace_id=550e8400-e29b-41d4-a716-446655440000&image_path=image.jpeg&crops_out_dir=crops&json_output_path=crops/output.json&pad_ratio=0.15
 Content-Type: application/json
 
 [
@@ -105,10 +112,10 @@ Response shape:
 {
   "input": {
     "image_name": "image.jpeg",
-    "image_path": "/abs/path/to/image.jpeg",
+    "image_path": "image.jpeg",
     "pad_ratio": 0.15,
-    "crops_out_dir": "/abs/path/to/crops",
-    "json_output_path": "/abs/path/to/crops/output.json",  // or null
+    "crops_out_dir": "crops",
+    "json_output_path": "crops/output.json",  // or null
     "box_count": 1
   },
   "output": {
@@ -116,12 +123,12 @@ Response shape:
       {
         "box_index": 0,
         "is_obb": true,
-        "crop_path": "/abs/path/to/crops/image_box0.jpg",
+        "crop_path": "crops/image_box0.jpg",
         "layout_angle": 0,
         "layout_margin": 0.228
       }
     ],
-    "crops_dir": "/abs/path/to/crops"
+    "crops_dir": "crops"
   },
   "start_at": "2026-08-21T09:35:11.714928+00:00",
   "finished_at": "2026-08-21T09:35:11.802391+00:00",
