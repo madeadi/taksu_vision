@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# Starts the split_pdf -> detect_boxes -> crop_boxes -> read_qr_ocr services
-# used by the pipeline. Each is a standalone HTTP server; this script only
-# starts them and health-checks them (no per-image orchestration) — callers
-# hit their /tasks endpoints directly.
+# Starts core, split_pdf, detect_boxes, crop_boxes, read_qr_ocr, and (unless
+# RUN_GEMINI_OCR=false) gemini_ocr. Each is a standalone HTTP server; this
+# script only starts them and health-checks them (no per-image
+# orchestration) — callers hit their /tasks (or, for core, CRUD) endpoints
+# directly.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-WORKSPACE="$SCRIPT_DIR"
+# Runtime dir for this script's own output (logs, default workspace root) —
+# gitignored, not to be confused with a service's WORKSPACE_ROOT.
+WORKSPACE="$REPO_ROOT/.run"
+mkdir -p "$WORKSPACE"
 INPUT_DIR="$WORKSPACE/input_imgs"
 
 # Shared workspace root: every service below reads/writes workspace files

@@ -45,3 +45,6 @@ composer.phar
 
 # Logs
 *.log
+
+# scripts/run_pipeline.sh's runtime dir (logs, default workspace root)
+/.run/
