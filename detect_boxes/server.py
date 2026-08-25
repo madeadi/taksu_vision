@@ -15,8 +15,11 @@ from pathlib import Path
 from fastapi import Body, FastAPI, HTTPException, Query
 from ultralytics import YOLO
 
+import train
 from detector import IMG_EXTS, detect
 from workspace import resolve_workspace_path, workspace_root_from_env
+
+DETECT_BOXES_DIR = Path(__file__).parent
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "weight.pt")
 DEVICE_ENV = os.environ.get("DEVICE")  # unset -> auto (mps on Apple Silicon, else cpu)
@@ -190,4 +193,128 @@ async def run_detect(
         with open(json_output_path_obj, "w") as output_file:
             json.dump(result, output_file, indent=2)
 
+    return result
+
+
+@app.post("/train")
+async def start_train(
+    workspace_id: str = Query(..., description="Workspace to read/write files in."),
+    images_dir: str = Query(..., description="Directory (relative to the workspace) of the raw training images."),
+    labels_path: str = Query(
+        ...,
+        description=(
+            "JSON file (relative to the workspace) mapping each image file name to its "
+            "box list: {\"img.jpg\": [{\"polygon\": [[x,y]]*4, \"class\": 0}, ...]}. "
+            "\"class\" is optional (defaults to 0). This is exactly the shape of the "
+            "\"polygon\" field POST /tasks returns per box, so /tasks output — reviewed "
+            "and corrected — can be fed straight back in as labels."
+        ),
+    ),
+    weights_out_path: str = Query(
+        ..., description="Path (relative to the workspace) to write the trained best.pt to."
+    ),
+    base_weights_path: str | None = Query(
+        None,
+        description=(
+            "Checkpoint to start training from (relative to the workspace). Omit to warm-start "
+            "from this server's currently loaded model (MODEL_PATH)."
+        ),
+    ),
+    class_names: list[str] | None = Body(
+        None,
+        embed=True,
+        description="Class names in index order. Omit to infer generic names from the class indices in labels_path.",
+    ),
+    epochs: int = Query(150, description="Training epochs."),
+    imgsz: int = Query(1024, description="Training image size."),
+    batch: int = Query(4, description="Training batch size."),
+    patience: int = Query(30, description="Epochs with no improvement before early stopping."),
+    val_split: float = Query(0.2, description="Fraction of images held out for validation."),
+):
+    try:
+        source_dir = resolve_workspace_path(WORKSPACE_ROOT, workspace_id, images_dir, must_exist=True)
+        labels_file = resolve_workspace_path(WORKSPACE_ROOT, workspace_id, labels_path, must_exist=True)
+        weights_out = resolve_workspace_path(WORKSPACE_ROOT, workspace_id, weights_out_path)
+        base_weights = (
+            resolve_workspace_path(WORKSPACE_ROOT, workspace_id, base_weights_path, must_exist=True)
+            if base_weights_path
+            else Path(MODEL_PATH).resolve()
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if not source_dir.is_dir():
+        raise HTTPException(400, f"images_dir not found or not a directory: {images_dir!r}")
+
+    try:
+        labels = json.loads(labels_file.read_text())
+    except json.JSONDecodeError as exc:
+        raise HTTPException(400, f"labels_path is not valid JSON: {exc}")
+    if not isinstance(labels, dict):
+        raise HTTPException(400, "labels_path must be a JSON object of {image_name: [box, ...]}")
+
+    input_data = {
+        "images_dir": images_dir,
+        "labels_path": labels_path,
+        "weights_out_path": weights_out_path,
+        "base_weights_path": base_weights_path,
+        "class_names": class_names,
+        "epochs": epochs,
+        "imgsz": imgsz,
+        "batch": batch,
+        "patience": patience,
+        "val_split": val_split,
+    }
+    start_at = datetime.now(timezone.utc)
+
+    try:
+        job_id = train.new_job_id()
+        job_dir = resolve_workspace_path(WORKSPACE_ROOT, workspace_id, f"_train/{job_id}")
+        resolved_class_names = class_names or train.infer_class_names(labels)
+        data_yaml = train.assemble_dataset(
+            job_dir, source_dir, labels, resolved_class_names, val_split, seed=int(job_id[:8], 16)
+        )
+        train.start_job(
+            DETECT_BOXES_DIR,
+            job_dir,
+            data_yaml,
+            base_weights,
+            weights_out,
+            epochs=epochs,
+            imgsz=imgsz,
+            batch=batch,
+            patience=patience,
+            device=state["device"],
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    return {
+        "input": input_data,
+        "output": {"job_id": job_id, "status": "pending", "class_names": resolved_class_names},
+        "start_at": start_at.isoformat(),
+        "finished_at": None,
+        "success": True,
+    }
+
+
+@app.get("/train/{job_id}")
+async def get_train_status(
+    job_id: str,
+    workspace_id: str = Query(..., description="Workspace the job was started in."),
+):
+    try:
+        job_dir = resolve_workspace_path(WORKSPACE_ROOT, workspace_id, f"_train/{job_id}", must_exist=True)
+        status = train.read_job_status(job_dir)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+
+    result = {
+        "input": {"workspace_id": workspace_id, "job_id": job_id},
+        "output": {k: v for k, v in status.items() if k not in {"error"}},
+        "start_at": status.get("start_at"),
+        "finished_at": status.get("finished_at"),
+        "success": status.get("status") != "failed",
+    }
+    if status.get("status") == "failed":
+        result["error"] = status.get("error")
     return result
