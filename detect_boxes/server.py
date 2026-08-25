@@ -36,6 +36,20 @@ def resolve_device(explicit: str | None) -> str:
     return "mps" if torch.backends.mps.is_available() else "cpu"
 
 
+def get_model(weights_path: Path | None):
+    """Return the model to detect with: the cached load for `weights_path`,
+    or this server's startup model (`state["model"]`) when omitted."""
+    if weights_path is None:
+        return state["model"]
+
+    key = str(weights_path)
+    cache = state.setdefault("model_cache", {})
+    if key not in cache:
+        print(f"Loading model {key}")
+        cache[key] = YOLO(key)
+    return cache[key]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     device = resolve_device(DEVICE_ENV)
@@ -101,12 +115,25 @@ async def run_detect(
             "score falls below this. 0 (default) disables the check."
         ),
     ),
+    weights_path: str | None = Query(
+        None,
+        description=(
+            "Weights file (relative to the workspace) to detect with, instead of this "
+            "server's startup model (MODEL_PATH). Loaded on first use and cached for reuse "
+            "across requests."
+        ),
+    ),
 ):
     try:
         source_dir = resolve_workspace_path(WORKSPACE_ROOT, workspace_id, images_dir, must_exist=True)
         json_output_path_obj = (
             resolve_workspace_path(WORKSPACE_ROOT, workspace_id, json_output_path)
             if json_output_path
+            else None
+        )
+        weights_path_obj = (
+            resolve_workspace_path(WORKSPACE_ROOT, workspace_id, weights_path, must_exist=True)
+            if weights_path
             else None
         )
     except ValueError as exc:
@@ -135,6 +162,7 @@ async def run_detect(
         "json_output_path": json_output_path,
         "confidence": confidence,
         "blur_threshold": blur_threshold,
+        "weights_path": weights_path,
     }
 
     start_at = datetime.now(timezone.utc)
@@ -148,7 +176,7 @@ async def run_detect(
         # `skipped` reports which specific images were skipped whole (never
         # detected on) and why — "unreadable" (cv2.imread failed) or "blurry".
         entries, skipped = detect(
-            state["model"],
+            get_model(weights_path_obj),
             source_paths,
             conf=confidence,
             blur_thresh=blur_threshold,

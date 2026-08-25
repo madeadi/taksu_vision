@@ -1,11 +1,14 @@
 # split_pdf
 
-Splits a PDF into single-page PDF files, via [pdfcpu](https://github.com/pdfcpu/pdfcpu).
-No image rendering, no OCR — page-splitting only.
+Splits a PDF into single-page files, via [pdfcpu](https://github.com/pdfcpu/pdfcpu).
+Default output is single-page PDFs (no rendering). `output_format=jpg` renders
+each page to a JPEG instead, via Ghostscript — for feeding pages straight into
+an image-only consumer like `../detect_boxes`. No OCR either way.
 
 ## Setup
 
-Requires Go 1.25+.
+Requires Go 1.25+. `output_format=jpg` additionally requires Ghostscript
+(`gs`) on `PATH` — not needed for the default PDF-splitting mode.
 
 ```bash
 go build -o split_pdf .
@@ -48,16 +51,18 @@ Workspaces themselves are created (and files uploaded into them) via
 | --- | --- | --- | --- | --- |
 | `workspace_id` | query | yes | — | Workspace to read/write files in. |
 | `pdf_path` | query | yes | — | Path (relative to the workspace) of the PDF to split. |
-| `pages_out_dir` | query | yes | — | Directory (relative to the workspace) to write single-page PDFs into. Created (with parents) if it doesn't exist. |
+| `pages_out_dir` | query | yes | — | Directory (relative to the workspace) to write single-page files into. Created (with parents) if it doesn't exist. |
+| `output_format` | query | no | `pdf` | `pdf` splits into single-page PDFs (default). `jpg` renders each page to a JPEG instead (via Ghostscript). |
+| `dpi` | query | no | `200` | Render resolution in DPI. Only used when `output_format=jpg`. |
 | `json_output_path` | query | no | — | Path (relative to the workspace) to write the response JSON to. If omitted, the response isn't written to disk. |
 
-Output files are named `{pdf_stem}_{page}.pdf` (1-based page number), e.g.
-`document.pdf` → `document_1.pdf`, `document_2.pdf`, ...
+Output files are named `{pdf_stem}_{page}.pdf` (or `.jpg` in jpg mode),
+1-based page number, e.g. `document.pdf` → `document_1.pdf`, `document_2.pdf`, ...
 
-Example request:
+Example request (JPEG pages at 150 DPI):
 
 ```
-POST /tasks?workspace_id=550e8400-e29b-41d4-a716-446655440000&pdf_path=document.pdf&pages_out_dir=pages&json_output_path=pages/output.json
+POST /tasks?workspace_id=550e8400-e29b-41d4-a716-446655440000&pdf_path=document.pdf&pages_out_dir=pages&output_format=jpg&dpi=150&json_output_path=pages/output.json
 ```
 
 Response shape (huma adds the `$schema` field to every JSON response,
@@ -72,6 +77,8 @@ pointing at that response's generated JSON Schema; the file written to
     "pdf_path": "document.pdf",
     "pdf_name": "document.pdf",
     "pages_out_dir": "pages",
+    "output_format": "pdf",
+    "dpi": 200,  // echoed even in pdf mode (its default), though unused there
     "json_output_path": "pages/output.json"  // omitted if not provided
   },
   "output": {
@@ -94,9 +101,11 @@ provided; otherwise it's only returned in the HTTP response, not saved to
 disk. `page_path` (and every other path field) is workspace-relative, so it
 can be fed straight into the next service's `/tasks` call.
 
-`workspace_id`, `pdf_path`, or `pages_out_dir` missing or empty return `422`
-(huma's standard request-validation response) before any splitting is
-attempted. A `workspace_id` that doesn't exist, a path escaping the
-workspace, or a `pdf_path` not found within it return `400`. Failures during
-splitting itself (e.g. a malformed PDF) are reported as `success: false`
-with an `error` message in the response body (HTTP status is still `200`).
+`workspace_id`, `pdf_path`, or `pages_out_dir` missing or empty, or an
+`output_format` other than `pdf`/`jpg`, return `422` (huma's standard
+request-validation response) before any splitting is attempted. A
+`workspace_id` that doesn't exist, a path escaping the workspace, or a
+`pdf_path` not found within it return `400`. Failures during splitting or
+rendering itself (e.g. a malformed PDF, or `gs` missing from `PATH` in jpg
+mode) are reported as `success: false` with an `error` message in the
+response body (HTTP status is still `200`).

@@ -26,6 +26,8 @@ type taskInput struct {
 	PDFPath        string `json:"pdf_path"`
 	PDFName        string `json:"pdf_name"`
 	PagesOutDir    string `json:"pages_out_dir"`
+	OutputFormat   string `json:"output_format"`
+	DPI            int    `json:"dpi,omitempty"`
 	JSONOutputPath string `json:"json_output_path,omitempty"`
 }
 
@@ -63,7 +65,9 @@ func healthHandler(ctx context.Context, input *struct{}) (*HealthOutput, error) 
 type TasksInput struct {
 	WorkspaceID    string `query:"workspace_id" required:"true" doc:"Workspace to read/write files in."`
 	PDFPath        string `query:"pdf_path" required:"true" doc:"Path (relative to the workspace) of the PDF to split."`
-	PagesOutDir    string `query:"pages_out_dir" required:"true" doc:"Directory (relative to the workspace) to write single-page PDFs into. Created (with parents) if it doesn't exist."`
+	PagesOutDir    string `query:"pages_out_dir" required:"true" doc:"Directory (relative to the workspace) to write single-page PDFs into (or single-page JPEGs, see output_format). Created (with parents) if it doesn't exist."`
+	OutputFormat   string `query:"output_format" default:"pdf" enum:"pdf,jpg" doc:"\"pdf\" (default) splits into single-page PDFs. \"jpg\" renders each page to a JPEG instead (via Ghostscript, which must be on PATH) — use this when the pages are headed straight into an image-only consumer like detect_boxes."`
+	DPI            int    `query:"dpi" default:"200" doc:"Render resolution in DPI. Only used when output_format=jpg."`
 	JSONOutputPath string `query:"json_output_path" doc:"Path (relative to the workspace) to write the response JSON to. If omitted, the response isn't written to disk."`
 }
 
@@ -75,6 +79,7 @@ func tasksHandler(ctx context.Context, input *TasksInput) (*TasksOutput, error) 
 	workspaceID := input.WorkspaceID
 	pdfPath := input.PDFPath
 	pagesOutDir := input.PagesOutDir
+	outputFormat := input.OutputFormat
 	jsonOutputPath := input.JSONOutputPath
 
 	resolvedPDFPath, err := resolveWorkspacePath(workspaceRoot, workspaceID, pdfPath, true)
@@ -94,7 +99,13 @@ func tasksHandler(ctx context.Context, input *TasksInput) (*TasksOutput, error) 
 	}
 
 	startAt := time.Now().UTC()
-	pages, splitErr := splitPDF(resolvedPDFPath, resolvedPagesOutDir)
+	var pages []PageResult
+	var splitErr error
+	if outputFormat == "jpg" {
+		pages, splitErr = rasterizePDF(resolvedPDFPath, resolvedPagesOutDir, input.DPI)
+	} else {
+		pages, splitErr = splitPDF(resolvedPDFPath, resolvedPagesOutDir)
+	}
 	finishedAt := time.Now().UTC()
 
 	// Rewrite absolute on-disk paths back to workspace-relative before
@@ -119,6 +130,8 @@ func tasksHandler(ctx context.Context, input *TasksInput) (*TasksOutput, error) 
 			PDFPath:        pdfPath,
 			PDFName:        filepath.Base(pdfPath),
 			PagesOutDir:    pagesOutDir,
+			OutputFormat:   outputFormat,
+			DPI:            input.DPI,
 			JSONOutputPath: jsonOutputPath,
 		},
 		Output: taskOutput{
