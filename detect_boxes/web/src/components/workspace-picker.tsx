@@ -28,7 +28,7 @@ export function WorkspacePicker({
     setCreating(true)
     try {
       const workspace = await api.createWorkspace()
-      toast.success(`Created workspace ${workspace.workspace_id}`)
+      toast.success(`Created workspace ${workspace.name}`)
       setWorkspaces((prev) => [...prev, workspace])
       onChange(workspace.workspace_id)
     } catch (err) {
@@ -47,7 +47,7 @@ export function WorkspacePicker({
         <SelectContent>
           {workspaces.map((ws) => (
             <SelectItem key={ws.workspace_id} value={ws.workspace_id}>
-              {ws.workspace_id}
+              {ws.name}
             </SelectItem>
           ))}
         </SelectContent>

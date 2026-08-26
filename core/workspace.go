@@ -24,6 +24,7 @@ const workspacesCollection = "workspaces"
 // "workspaces" PocketBase collection.
 type WorkspaceMeta struct {
 	WorkspaceID string
+	Name        string
 	CreatedAt   time.Time
 	ExpiresAt   time.Time
 }
@@ -56,11 +57,15 @@ func filesDir(root, id string) string {
 
 // createWorkspace creates a new workspace directory (with its files/
 // subdirectory) under root and records its creation/expiry metadata in
-// PocketBase.
-func createWorkspace(app core.App, root string, ttl time.Duration) (WorkspaceMeta, error) {
+// PocketBase. If name is blank, a default name derived from the generated
+// workspace id is used instead, so every workspace always has a name.
+func createWorkspace(app core.App, root string, ttl time.Duration, name string) (WorkspaceMeta, error) {
 	id, err := newWorkspaceID()
 	if err != nil {
 		return WorkspaceMeta{}, fmt.Errorf("generate workspace id: %w", err)
+	}
+	if name == "" {
+		name = defaultWorkspaceName(id)
 	}
 	if err := os.MkdirAll(filesDir(root, id), 0o755); err != nil {
 		return WorkspaceMeta{}, fmt.Errorf("create workspace dir: %w", err)
@@ -76,13 +81,33 @@ func createWorkspace(app core.App, root string, ttl time.Duration) (WorkspaceMet
 
 	record := core.NewRecord(collection)
 	record.Set("workspace_id", id)
+	record.Set("name", name)
 	record.Set("created_at", now)
 	record.Set("expires_at", expiresAt)
 	if err := app.Save(record); err != nil {
 		return WorkspaceMeta{}, fmt.Errorf("save workspace record: %w", err)
 	}
 
-	return WorkspaceMeta{WorkspaceID: id, CreatedAt: now, ExpiresAt: expiresAt}, nil
+	return WorkspaceMeta{WorkspaceID: id, Name: name, CreatedAt: now, ExpiresAt: expiresAt}, nil
+}
+
+// defaultWorkspaceName returns a fallback name for a workspace created
+// without one, derived from its id so it stays unique and recognizable.
+func defaultWorkspaceName(id string) string {
+	return "Workspace " + id[:8]
+}
+
+// renameWorkspace updates an existing workspace's display name.
+func renameWorkspace(app core.App, id, name string) (WorkspaceMeta, error) {
+	record, err := app.FindFirstRecordByFilter(workspacesCollection, "workspace_id = {:id}", dbx.Params{"id": id})
+	if err != nil {
+		return WorkspaceMeta{}, fmt.Errorf("workspace not found: %s", id)
+	}
+	record.Set("name", name)
+	if err := app.Save(record); err != nil {
+		return WorkspaceMeta{}, fmt.Errorf("save workspace record: %w", err)
+	}
+	return recordToMeta(record), nil
 }
 
 // loadWorkspaceMeta reads a workspace's metadata from PocketBase. Returns an
@@ -110,8 +135,13 @@ func listWorkspaces(app core.App) ([]WorkspaceMeta, error) {
 }
 
 func recordToMeta(record *core.Record) WorkspaceMeta {
+	name := record.GetString("name")
+	if name == "" {
+		name = defaultWorkspaceName(record.GetString("workspace_id"))
+	}
 	return WorkspaceMeta{
 		WorkspaceID: record.GetString("workspace_id"),
+		Name:        name,
 		CreatedAt:   record.GetDateTime("created_at").Time(),
 		ExpiresAt:   record.GetDateTime("expires_at").Time(),
 	}

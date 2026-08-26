@@ -40,7 +40,10 @@ import (
 
 const defaultTTLHours = 24 * 7
 const defaultSweepIntervalMinutes = 60
-const defaultCorsAllowedOrigins = "http://localhost:5173,http://localhost:8825"
+// TODO: revisit once request auth (e.g. JWT) is in front of this API — an
+// open CORS policy is fine while every endpoint is unauthenticated local
+// dev tooling, but not once these routes can act on a caller's behalf.
+const defaultCorsAllowedOrigins = "*"
 
 type server struct {
 	root string
@@ -279,6 +282,14 @@ func (s *server) registerRoutes(api huma.API) {
 	}, s.getWorkspaceHandler)
 
 	huma.Register(api, huma.Operation{
+		OperationID: "rename-workspace",
+		Method:      http.MethodPatch,
+		Path:        "/workspaces/{id}",
+		Summary:     "Rename a workspace",
+		Tags:        []string{"workspaces"},
+	}, s.renameWorkspaceHandler)
+
+	huma.Register(api, huma.Operation{
 		OperationID: "delete-workspace",
 		Method:      http.MethodDelete,
 		Path:        "/workspaces/{id}",
@@ -368,22 +379,61 @@ func (s *server) healthHandler(ctx context.Context, input *struct{}) (*HealthOut
 
 // --- create workspace ---
 
+type CreateWorkspaceInput struct {
+	Body struct {
+		Name string `json:"name,omitempty" doc:"Display name (default: derived from the generated workspace id)" example:"Q3 invoices"`
+	}
+}
+
 type CreateWorkspaceOutput struct {
 	Status int
 	Body   struct {
 		WorkspaceID string `json:"workspace_id"`
+		Name        string `json:"name"`
 		CreatedAt   string `json:"created_at"`
 		ExpiresAt   string `json:"expires_at"`
 	}
 }
 
-func (s *server) createWorkspaceHandler(ctx context.Context, input *struct{}) (*CreateWorkspaceOutput, error) {
-	meta, err := createWorkspace(s.app, s.root, s.ttl)
+func (s *server) createWorkspaceHandler(ctx context.Context, input *CreateWorkspaceInput) (*CreateWorkspaceOutput, error) {
+	meta, err := createWorkspace(s.app, s.root, s.ttl, input.Body.Name)
 	if err != nil {
 		return nil, huma.Error500InternalServerError(err.Error())
 	}
 	resp := &CreateWorkspaceOutput{Status: http.StatusCreated}
 	resp.Body.WorkspaceID = meta.WorkspaceID
+	resp.Body.Name = meta.Name
+	resp.Body.CreatedAt = meta.CreatedAt.Format(time.RFC3339Nano)
+	resp.Body.ExpiresAt = meta.ExpiresAt.Format(time.RFC3339Nano)
+	return resp, nil
+}
+
+// --- rename workspace ---
+
+type RenameWorkspaceInput struct {
+	ID   string `path:"id" doc:"Workspace ID"`
+	Body struct {
+		Name string `json:"name" required:"true" doc:"New display name" example:"Q3 invoices"`
+	}
+}
+
+type RenameWorkspaceOutput struct {
+	Body struct {
+		WorkspaceID string `json:"workspace_id"`
+		Name        string `json:"name"`
+		CreatedAt   string `json:"created_at"`
+		ExpiresAt   string `json:"expires_at"`
+	}
+}
+
+func (s *server) renameWorkspaceHandler(ctx context.Context, input *RenameWorkspaceInput) (*RenameWorkspaceOutput, error) {
+	meta, err := renameWorkspace(s.app, input.ID, input.Body.Name)
+	if err != nil {
+		return nil, huma.Error404NotFound(err.Error())
+	}
+	resp := &RenameWorkspaceOutput{}
+	resp.Body.WorkspaceID = meta.WorkspaceID
+	resp.Body.Name = meta.Name
 	resp.Body.CreatedAt = meta.CreatedAt.Format(time.RFC3339Nano)
 	resp.Body.ExpiresAt = meta.ExpiresAt.Format(time.RFC3339Nano)
 	return resp, nil
@@ -393,6 +443,7 @@ func (s *server) createWorkspaceHandler(ctx context.Context, input *struct{}) (*
 
 type WorkspaceSummary struct {
 	WorkspaceID string `json:"workspace_id"`
+	Name        string `json:"name"`
 	CreatedAt   string `json:"created_at"`
 	ExpiresAt   string `json:"expires_at"`
 }
@@ -413,6 +464,7 @@ func (s *server) listWorkspacesHandler(ctx context.Context, input *struct{}) (*L
 	for _, meta := range metas {
 		resp.Body.Workspaces = append(resp.Body.Workspaces, WorkspaceSummary{
 			WorkspaceID: meta.WorkspaceID,
+			Name:        meta.Name,
 			CreatedAt:   meta.CreatedAt.Format(time.RFC3339Nano),
 			ExpiresAt:   meta.ExpiresAt.Format(time.RFC3339Nano),
 		})
@@ -429,6 +481,7 @@ type WorkspaceIDInput struct {
 type GetWorkspaceOutput struct {
 	Body struct {
 		WorkspaceID string      `json:"workspace_id"`
+		Name        string      `json:"name"`
 		CreatedAt   string      `json:"created_at"`
 		ExpiresAt   string      `json:"expires_at"`
 		Files       []FileEntry `json:"files"`
@@ -446,6 +499,7 @@ func (s *server) getWorkspaceHandler(ctx context.Context, input *WorkspaceIDInpu
 	}
 	resp := &GetWorkspaceOutput{}
 	resp.Body.WorkspaceID = meta.WorkspaceID
+	resp.Body.Name = meta.Name
 	resp.Body.CreatedAt = meta.CreatedAt.Format(time.RFC3339Nano)
 	resp.Body.ExpiresAt = meta.ExpiresAt.Format(time.RFC3339Nano)
 	resp.Body.Files = files

@@ -8,6 +8,7 @@ const API_BASE_URL = (
 
 export interface WorkspaceSummary {
   workspace_id: string
+  name: string
   created_at: string
   expires_at: string
 }
@@ -33,7 +34,11 @@ export function listWorkspaces(): Promise<WorkspaceSummary[]> {
 }
 
 export function createWorkspace(): Promise<WorkspaceSummary> {
-  return request<WorkspaceSummary>("/workspaces", { method: "POST" })
+  return request<WorkspaceSummary>("/workspaces", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  })
 }
 
 export async function uploadFiles(

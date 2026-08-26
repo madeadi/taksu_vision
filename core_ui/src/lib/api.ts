@@ -6,6 +6,7 @@ const API_BASE_URL = (
 
 export interface WorkspaceSummary {
   workspace_id: string
+  name: string
   created_at: string
   expires_at: string
 }
@@ -34,8 +35,20 @@ export function listWorkspaces(): Promise<WorkspaceSummary[]> {
   )
 }
 
-export function createWorkspace(): Promise<WorkspaceSummary> {
-  return request<WorkspaceSummary>("/workspaces", { method: "POST" })
+export function createWorkspace(name?: string): Promise<WorkspaceSummary> {
+  return request<WorkspaceSummary>("/workspaces", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: name || undefined }),
+  })
+}
+
+export function renameWorkspace(id: string, name: string): Promise<WorkspaceSummary> {
+  return request<WorkspaceSummary>(`/workspaces/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  })
 }
 
 export function getWorkspace(id: string): Promise<WorkspaceDetail> {

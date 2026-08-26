@@ -12,6 +12,16 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -30,7 +40,13 @@ export function WorkspaceList({
 }) {
   const [workspaces, setWorkspaces] = useState<api.WorkspaceSummary[]>([])
   const [loading, setLoading] = useState(true)
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState("")
   const [creating, setCreating] = useState(false)
+  // null while renaming nothing; the workspace being renamed otherwise.
+  const [renaming, setRenaming] = useState<api.WorkspaceSummary | null>(null)
+  const [renameValue, setRenameValue] = useState("")
+  const [renameSubmitting, setRenameSubmitting] = useState(false)
 
   const refresh = () => {
     setLoading(true)
@@ -46,13 +62,35 @@ export function WorkspaceList({
   const handleCreate = async () => {
     setCreating(true)
     try {
-      const workspace = await api.createWorkspace()
-      toast.success(`Created workspace ${workspace.workspace_id}`)
+      const workspace = await api.createWorkspace(name.trim())
+      toast.success(`Created workspace ${workspace.name}`)
+      setOpen(false)
+      setName("")
       refresh()
     } catch (err) {
       toast.error((err as Error).message)
     } finally {
       setCreating(false)
+    }
+  }
+
+  const openRenameDialog = (ws: api.WorkspaceSummary) => {
+    setRenaming(ws)
+    setRenameValue(ws.name)
+  }
+
+  const handleRename = async () => {
+    if (!renaming || !renameValue.trim()) return
+    setRenameSubmitting(true)
+    try {
+      await api.renameWorkspace(renaming.workspace_id, renameValue.trim())
+      toast.success(`Renamed to ${renameValue.trim()}`)
+      setRenaming(null)
+      refresh()
+    } catch (err) {
+      toast.error((err as Error).message)
+    } finally {
+      setRenameSubmitting(false)
     }
   }
 
@@ -70,9 +108,54 @@ export function WorkspaceList({
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-8">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Workspaces</h1>
-        <Button onClick={handleCreate} disabled={creating}>
-          {creating ? "Creating…" : "Create workspace"}
-        </Button>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger render={<Button />}>Create workspace</DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Create workspace</DialogTitle>
+            </DialogHeader>
+            <Input
+              placeholder="Name (optional)"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <DialogFooter>
+              <DialogClose render={<Button variant="outline" />}>
+                Cancel
+              </DialogClose>
+              <Button onClick={handleCreate} disabled={creating}>
+                {creating ? "Creating…" : "Create"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={renaming !== null}
+          onOpenChange={(v) => !v && setRenaming(null)}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Rename workspace</DialogTitle>
+            </DialogHeader>
+            <Input
+              placeholder="Name"
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+            />
+            <DialogFooter>
+              <DialogClose render={<Button variant="outline" />}>
+                Cancel
+              </DialogClose>
+              <Button
+                onClick={handleRename}
+                disabled={renameSubmitting || !renameValue.trim()}
+              >
+                {renameSubmitting ? "Saving…" : "Save"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
 
       {loading ? (
@@ -89,7 +172,7 @@ export function WorkspaceList({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Workspace ID</TableHead>
+              <TableHead>Name</TableHead>
               <TableHead>Created</TableHead>
               <TableHead>Expires</TableHead>
               <TableHead className="w-0" />
@@ -99,10 +182,10 @@ export function WorkspaceList({
             {workspaces.map((ws) => (
               <TableRow key={ws.workspace_id} className="cursor-pointer">
                 <TableCell
-                  className="font-mono text-sm"
+                  className="font-medium"
                   onClick={() => onSelect(ws.workspace_id)}
                 >
-                  {ws.workspace_id}
+                  {ws.name}
                 </TableCell>
                 <TableCell onClick={() => onSelect(ws.workspace_id)}>
                   {new Date(ws.created_at).toLocaleString()}
@@ -110,7 +193,14 @@ export function WorkspaceList({
                 <TableCell onClick={() => onSelect(ws.workspace_id)}>
                   {new Date(ws.expires_at).toLocaleString()}
                 </TableCell>
-                <TableCell>
+                <TableCell className="flex justify-end gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => openRenameDialog(ws)}
+                  >
+                    Rename
+                  </Button>
                   <AlertDialog>
                     <AlertDialogTrigger
                       render={<Button variant="ghost" size="sm" />}
@@ -121,8 +211,8 @@ export function WorkspaceList({
                       <AlertDialogHeader>
                         <AlertDialogTitle>Delete workspace?</AlertDialogTitle>
                         <AlertDialogDescription>
-                          This permanently deletes {ws.workspace_id} and every
-                          file in it. This can't be undone.
+                          This permanently deletes {ws.name} ({ws.workspace_id}
+                          ) and every file in it. This can't be undone.
                         </AlertDialogDescription>
                       </AlertDialogHeader>
                       <AlertDialogFooter>

@@ -207,8 +207,8 @@ npm run dev  # http://localhost:8825
 Configure `VITE_CORE_API_URL` (default `http://localhost:8824`) and
 `VITE_DETECT_BOXES_API_URL` (default `http://localhost:8821`) via `.env`
 (see `.env.example`). `core`'s and this service's `CORS_ALLOWED_ORIGINS`
-both default to including `http://localhost:8825`, so no extra CORS setup
-is needed for local dev.
+both default to `*` (any origin), so no extra CORS setup is needed for
+local dev — see the note on that default in `../core/README.md`.
 
 Register it with `core` with `web_url` pointing at `:8825` (`POST
 /services`, or `scripts/seed_services.sh`'s default) so `core_ui`'s Services
@@ -237,3 +237,9 @@ this mode, register `web_url` as `http://127.0.0.1:8821/web` — the web app
 lives at that sub-path of the API's own port. Rebuild (`npm run build`) and
 restart the server to pick up frontend changes — there's no hot reload in
 this mode.
+
+The built web app's own API calls are same-origin (it's served from the
+same process/port), but it still calls `../core`'s workspace API
+cross-origin — covered by `core`'s wide-open `CORS_ALLOWED_ORIGINS` default
+(see the note on that default in `../core/README.md`), so no extra CORS
+setup is needed for local dev in this mode either.

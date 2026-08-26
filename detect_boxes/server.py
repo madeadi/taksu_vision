@@ -29,7 +29,10 @@ MODEL_PATH = os.environ.get("MODEL_PATH", "weight.pt")
 DEVICE_ENV = os.environ.get("DEVICE")  # unset -> auto (mps on Apple Silicon, else cpu)
 WORKSPACE_ROOT = workspace_root_from_env()
 
-DEFAULT_CORS_ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:8825"
+# TODO: revisit once request auth (e.g. JWT) is in front of this API — an
+# open CORS policy is fine while every endpoint is unauthenticated local dev
+# tooling, but not once these routes can act on a caller's behalf.
+DEFAULT_CORS_ALLOWED_ORIGINS = "*"
 
 
 def cors_allowed_origins() -> list[str]:

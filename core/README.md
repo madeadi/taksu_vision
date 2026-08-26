@@ -66,7 +66,7 @@ Swagger UI / interactive docs at `/docs` (OpenAPI schema at `/openapi.json`).
 | `TTL_HOURS` | `168` (7 days) | How long a workspace lives after creation before the sweep removes it. |
 | `SWEEP_INTERVAL_MINUTES` | `60` | How often the background sweep checks for expired workspaces. |
 | `DB_DIR` | `./pb_data` | Directory for the embedded PocketBase/SQLite metadata store. Deliberately separate from `WORKSPACE_ROOT` — it must not live under it. |
-| `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | Comma-separated list of origins allowed to call this API cross-origin (e.g. the `core_ui` dev/prod origin). |
+| `CORS_ALLOWED_ORIGINS` | `*` | Comma-separated list of origins allowed to call this API cross-origin, or `*` for any origin. Defaults wide open since every endpoint here is unauthenticated local dev tooling; tighten this (and put real auth in front of the API) before exposing it beyond a trusted local setup. |
 
 ## On-disk layout
 
@@ -97,12 +97,17 @@ Returns `{"status", "workspace_root", "workspace_count"}`.
 
 ### `POST /workspaces`
 
-Creates a new workspace. No request body.
+Creates a new workspace. Request body is optional; `name` defaults to
+`"Workspace {first 8 chars of the generated id}"` if omitted.
 
 ```jsonc
+// request (optional)
+{"name": "Q3 invoices"}
+
 // 201
 {
   "workspace_id": "550e8400-e29b-41d4-a716-446655440000",
+  "name": "Q3 invoices",
   "created_at": "2026-08-24T08:00:00Z",
   "expires_at": "2026-08-31T08:00:00Z"
 }
@@ -156,7 +161,7 @@ for that).
 // 200
 {
   "workspaces": [
-    {"workspace_id": "550e8400-...", "created_at": "2026-08-24T08:00:00Z", "expires_at": "2026-08-31T08:00:00Z"}
+    {"workspace_id": "550e8400-...", "name": "Q3 invoices", "created_at": "2026-08-24T08:00:00Z", "expires_at": "2026-08-31T08:00:00Z"}
   ]
 }
 ```
@@ -168,9 +173,29 @@ Returns workspace metadata plus a recursive file listing.
 ```jsonc
 {
   "workspace_id": "550e8400-...",
+  "name": "Q3 invoices",
   "created_at": "2026-08-24T08:00:00Z",
   "expires_at": "2026-08-31T08:00:00Z",
   "files": [{"path": "document.pdf", "size": 5440975}, {"path": "pages/document_1.pdf", "size": 48428}]
+}
+```
+
+`404` if the workspace doesn't exist.
+
+### `PATCH /workspaces/{id}`
+
+Renames a workspace.
+
+```jsonc
+// request
+{"name": "Q3 invoices (final)"}
+
+// 200
+{
+  "workspace_id": "550e8400-...",
+  "name": "Q3 invoices (final)",
+  "created_at": "2026-08-24T08:00:00Z",
+  "expires_at": "2026-08-31T08:00:00Z"
 }
 ```
 

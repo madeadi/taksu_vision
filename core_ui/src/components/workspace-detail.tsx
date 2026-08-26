@@ -20,6 +20,16 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -56,6 +66,9 @@ export function WorkspaceDetail({
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [renameValue, setRenameValue] = useState("")
+  const [renameSubmitting, setRenameSubmitting] = useState(false)
 
   const refresh = () => {
     setLoading(true)
@@ -93,6 +106,26 @@ export function WorkspaceDetail({
     }
   }
 
+  const openRenameDialog = () => {
+    setRenameValue(workspace?.name ?? "")
+    setRenameOpen(true)
+  }
+
+  const handleRename = async () => {
+    if (!renameValue.trim()) return
+    setRenameSubmitting(true)
+    try {
+      await api.renameWorkspace(id, renameValue.trim())
+      toast.success(`Renamed to ${renameValue.trim()}`)
+      setRenameOpen(false)
+      refresh()
+    } catch (err) {
+      toast.error((err as Error).message)
+    } finally {
+      setRenameSubmitting(false)
+    }
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-8">
       <div className="flex items-center gap-2">
@@ -110,10 +143,41 @@ export function WorkspaceDetail({
         <>
           <Card>
             <CardHeader>
-              <CardTitle className="font-mono text-base">
-                {workspace.workspace_id}
-              </CardTitle>
+              <div className="flex items-center gap-2">
+                <CardTitle className="text-base">{workspace.name}</CardTitle>
+                <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+                  <DialogTrigger
+                    render={
+                      <Button variant="ghost" size="sm" onClick={openRenameDialog} />
+                    }
+                  >
+                    Rename
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Rename workspace</DialogTitle>
+                    </DialogHeader>
+                    <Input
+                      placeholder="Name"
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                    />
+                    <DialogFooter>
+                      <DialogClose render={<Button variant="outline" />}>
+                        Cancel
+                      </DialogClose>
+                      <Button
+                        onClick={handleRename}
+                        disabled={renameSubmitting || !renameValue.trim()}
+                      >
+                        {renameSubmitting ? "Saving…" : "Save"}
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </div>
               <CardDescription className="flex flex-wrap gap-x-6 gap-y-1 pt-1">
+                <span className="font-mono">{workspace.workspace_id}</span>
                 <span>
                   Created {new Date(workspace.created_at).toLocaleString()}
                 </span>
