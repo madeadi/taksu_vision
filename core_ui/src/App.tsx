@@ -1,4 +1,6 @@
 import { useState } from "react"
+import { DetectTry } from "@/components/detect-try"
+import { DetectWeights } from "@/components/detect-weights"
 import { ServiceList } from "@/components/service-list"
 import { Sidebar, type View } from "@/components/sidebar"
 import { WorkspaceDetail } from "@/components/workspace-detail"
@@ -21,6 +23,10 @@ function App() {
       <main className="flex-1 overflow-y-auto">
         {view === "services" ? (
           <ServiceList />
+        ) : view === "detect-try" ? (
+          <DetectTry />
+        ) : view === "detect-weights" ? (
+          <DetectWeights />
         ) : selectedWorkspaceId ? (
           <WorkspaceDetail
             id={selectedWorkspaceId}

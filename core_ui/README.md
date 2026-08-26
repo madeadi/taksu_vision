@@ -2,11 +2,25 @@
 
 Workspace management UI for [`core`](../core) — create/list/delete
 workspaces, upload files into one, browse and download its files
-individually or as a zip archive. React + Vite + TypeScript + Tailwind CSS +
-shadcn/ui.
+individually or as a zip archive — plus two pages for
+[`detect_boxes`](../detect_boxes): **Try** (run detection over uploaded
+images and see the boxes drawn on them) and **Weights** (manage the trained-
+weights registry, and train a new model: pick a base weight, annotate raw
+images with bounding boxes, then start a training job). React + Vite +
+TypeScript + Tailwind CSS + shadcn/ui.
 
-Talks only to `core`'s documented REST API (`/health`, `/workspaces`, ...);
-see `../core/README.md` for the API itself.
+Talks to `core`'s documented REST API (`/health`, `/workspaces`, ...; see
+`../core/README.md`) for workspace/file management, and directly to
+`detect_boxes`'s REST API (see `../detect_boxes/README.md`) for detection,
+the weights registry, and training.
+
+Model selection (Try page) and base-model selection (train wizard) list
+weights from `detect_boxes`'s global registry, but `/tasks` and `/train`
+only accept a weights path relative to the target workspace's files — a
+registered weight is only usable in a workspace if it was trained in that
+same workspace. Weights trained elsewhere show as disabled in the wizard's
+base-model picker (or fail with a clear error if picked as the Try page's
+model), rather than silently being ignored.
 
 ## Setup
 
@@ -38,3 +52,4 @@ npm run build   # type-checks then builds to dist/
 | Variable | Default | Description |
 | --- | --- | --- |
 | `VITE_CORE_API_URL` | `http://localhost:8824` | Base URL of the `core` API this UI calls. |
+| `VITE_DETECT_BOXES_API_URL` | `http://localhost:8821` | Base URL of the `detect_boxes` API this UI calls. |
