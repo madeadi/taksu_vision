@@ -155,6 +155,29 @@ def read_job_status(job_dir: Path) -> dict:
     return status
 
 
+def list_jobs(train_root: Path) -> list[dict]:
+    """Read back every job's status.json under `train_root` (a workspace's
+    `_train` directory), newest first by `start_at`. Returns `[]` if
+    `train_root` doesn't exist yet (no jobs started). Skips any job
+    directory `read_job_status` can't parse rather than failing the whole
+    listing."""
+    if not train_root.is_dir():
+        return []
+
+    jobs = []
+    for job_dir in train_root.iterdir():
+        if not job_dir.is_dir():
+            continue
+        try:
+            status = read_job_status(job_dir)
+        except ValueError:
+            continue
+        jobs.append({"job_id": job_dir.name, **status})
+
+    jobs.sort(key=lambda job: job.get("start_at") or "", reverse=True)
+    return jobs
+
+
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)

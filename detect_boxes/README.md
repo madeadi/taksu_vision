@@ -144,6 +144,40 @@ service expects) to get rectified crop files. This same response body is
 also written to `json_output_path` when it's provided; otherwise it's only
 returned in the HTTP response, not saved to disk.
 
+### `GET /train`
+
+Lists every training job started in the given workspace (i.e. every
+`_train/{job_id}` directory), newest first by `start_at`. Each entry is the
+same status shape `GET /train/{job_id}` returns in its `output`, plus
+`job_id`.
+
+| Query param | Required | Default | Description |
+| --- | --- | --- | --- |
+| `workspace_id` | yes | — | Workspace to list training jobs in. |
+
+```jsonc
+{
+  "input": {"workspace_id": "ws1"},
+  "output": {
+    "jobs": [
+      {
+        "job_id": "3f9c...",
+        "status": "succeeded",
+        "start_at": "2026-08-21T09:35:11.714928+00:00",
+        "finished_at": "2026-08-21T10:02:44.001122+00:00",
+        "metrics": {"metrics/mAP50(OBB)": 0.912},
+        "weights_out": "/path/to/best.pt"
+      },
+      {"job_id": "a1b2...", "status": "running", "pid": 4821, "start_at": "..."}
+    ]
+  },
+  "success": true
+}
+```
+
+No jobs started yet in the workspace returns `{"output": {"jobs": []}}` rather
+than an error.
+
 ### `GET /weights` / `DELETE /weights/{name}`
 
 A JSON-backed registry (`weights.json`, global to this service — not scoped

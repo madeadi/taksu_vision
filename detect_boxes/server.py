@@ -338,6 +338,22 @@ async def start_train(
     }
 
 
+@app.get("/train")
+async def list_train_jobs(
+    workspace_id: str = Query(..., description="Workspace to list training jobs in."),
+):
+    try:
+        train_root = resolve_workspace_path(WORKSPACE_ROOT, workspace_id, "_train")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    return {
+        "input": {"workspace_id": workspace_id},
+        "output": {"jobs": train.list_jobs(train_root)},
+        "success": True,
+    }
+
+
 @app.get("/train/{job_id}")
 async def get_train_status(
     job_id: str,
