@@ -1,19 +1,12 @@
 import { cn } from "@/lib/utils"
 
-export type View = "workspaces" | "services" | "detect-try" | "detect-weights"
+export type View = "workspaces" | "services"
 
 const NAV_GROUPS: { label?: string; items: { id: View; label: string }[] }[] = [
   {
     items: [
       { id: "workspaces", label: "Workspaces" },
       { id: "services", label: "Services" },
-    ],
-  },
-  {
-    label: "Detect Boxes",
-    items: [
-      { id: "detect-try", label: "Try" },
-      { id: "detect-weights", label: "Weights" },
     ],
   },
 ]

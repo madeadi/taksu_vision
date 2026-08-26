@@ -186,3 +186,54 @@ per workspace) of trained model weights, each `{"name", "description",
 (`name` is the job id, `path` the absolute path to the written weights
 file) — there's no register endpoint. `DELETE` removes the registry entry
 only; the weights file on disk is left in place.
+
+## Web app
+
+`web/` is this service's own web app (React/TypeScript/Vite/Tailwind/shadcn,
+same stack as `../core_ui`), per root `AGENT.md`: a "Try" page (run
+detection against images in a workspace) and a "Weights" page (manage the
+weights registry, kick off training via `DetectTrainWizard`). It talks
+directly to this service's own HTTP API above and to `../core`'s workspace
+API — it does not go through `core_ui`.
+
+### Dev mode: separate Vite server (hot reload)
+
+```bash
+cd web
+npm install
+npm run dev  # http://localhost:8825
+```
+
+Configure `VITE_CORE_API_URL` (default `http://localhost:8824`) and
+`VITE_DETECT_BOXES_API_URL` (default `http://localhost:8821`) via `.env`
+(see `.env.example`). `core`'s and this service's `CORS_ALLOWED_ORIGINS`
+both default to including `http://localhost:8825`, so no extra CORS setup
+is needed for local dev.
+
+Register it with `core` with `web_url` pointing at `:8825` (`POST
+/services`, or `scripts/seed_services.sh`'s default) so `core_ui`'s Services
+page can iframe it — see `../core/README.md`.
+
+### Built mode: served by this service's own Python process
+
+`server.py` also serves the built web app itself, so the whole service
+(API + web app) is a single process on a single port — no separate frontend
+process needed:
+
+```bash
+cd web && npm install && npm run build   # writes web/dist
+cd ..
+MODEL_PATH=weight.pt WORKSPACE_ROOT=/path/to/shared/storage \
+  uvicorn server:app --host 0.0.0.0 --port 8821
+```
+
+`server.py` mounts `web/dist` at `/web` (after all API routes, so `/health`,
+`/tasks`, `/docs`, etc. still take priority) only if that directory exists
+— absent a build, this is a no-op and the API behaves as before.
+`vite.config.ts` sets `base: "/web/"` for `npm run build` so the built
+`index.html`'s asset/favicon URLs match that mount point (the dev server
+keeps `base: "/"`, since it's served at its own origin's root instead). In
+this mode, register `web_url` as `http://127.0.0.1:8821/web` — the web app
+lives at that sub-path of the API's own port. Rebuild (`npm run build`) and
+restart the server to pick up frontend changes — there's no hot reload in
+this mode.

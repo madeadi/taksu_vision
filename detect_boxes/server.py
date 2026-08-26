@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from ultralytics import YOLO
 
 import train
@@ -21,10 +23,21 @@ from detector import IMG_EXTS, detect
 from workspace import resolve_workspace_path, workspace_root_from_env
 
 DETECT_BOXES_DIR = Path(__file__).parent
+WEB_DIST_DIR = DETECT_BOXES_DIR / "web" / "dist"
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "weight.pt")
 DEVICE_ENV = os.environ.get("DEVICE")  # unset -> auto (mps on Apple Silicon, else cpu)
 WORKSPACE_ROOT = workspace_root_from_env()
+
+DEFAULT_CORS_ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:8825"
+
+
+def cors_allowed_origins() -> list[str]:
+    """CORS_ALLOWED_ORIGINS as a comma-separated list of origins allowed to
+    call this API cross-origin (e.g. the workspace management UI's dev/prod
+    origin). Defaults to the Vite dev server origin."""
+    v = os.environ.get("CORS_ALLOWED_ORIGINS", DEFAULT_CORS_ALLOWED_ORIGINS)
+    return [origin.strip() for origin in v.split(",") if origin.strip()]
 
 state: dict = {}
 
@@ -74,6 +87,13 @@ app = FastAPI(
         "`../crop_boxes`), no barcode decoding, no OCR."
     ),
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_allowed_origins(),
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -375,3 +395,14 @@ async def get_train_status(
     if status.get("status") == "failed":
         result["error"] = status.get("error")
     return result
+
+
+# Serves the built web app (see README.md) at /web on this same
+# port/process, once it's been built (`cd web && npm run build` -> web/dist;
+# vite.config.ts sets base: "/web/" for that build so its asset URLs match
+# this mount point). Registered last so it only catches paths no route above
+# matched — the API routes and /docs/openapi.json above always take
+# priority. Absent in dev, where the web app instead runs its own
+# `npm run dev` server (see web/).
+if WEB_DIST_DIR.is_dir():
+    app.mount("/web", StaticFiles(directory=str(WEB_DIST_DIR), html=True), name="web")

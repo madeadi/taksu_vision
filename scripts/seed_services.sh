@@ -28,14 +28,15 @@ wait_for_health
 existing="$(curl -sf "$CORE_URL/services" | jq -r '.services[].name')"
 
 register() {
-  local name="$1" url="$2"
+  local name="$1" url="$2" web_url="${3:-}"
   if grep -qxF "$name" <<<"$existing"; then
     echo "==> $name already registered, skipping"
     return
   fi
-  echo "==> registering $name ($url)"
+  echo "==> registering $name ($url)${web_url:+, web app ($web_url)}"
   local body
-  body="$(jq -n --arg name "$name" --arg url "$url" '{name: $name, url: $url}')"
+  body="$(jq -n --arg name "$name" --arg url "$url" --arg web_url "$web_url" \
+    '{name: $name, url: $url} + (if $web_url == "" then {} else {web_url: $web_url} end)')"
   curl -sf -X POST "$CORE_URL/services" \
     -H "Content-Type: application/json" \
     -d "$body" -o /dev/null -w "    -> %{http_code}\n"
@@ -43,7 +44,7 @@ register() {
 
 register "core" "$CORE_URL"
 register "split_pdf" "${SPLIT_PDF_URL:-http://127.0.0.1:8823}"
-register "detect_boxes" "${DETECT_BOXES_URL:-http://127.0.0.1:8821}"
+register "detect_boxes" "${DETECT_BOXES_URL:-http://127.0.0.1:8821}" "${DETECT_BOXES_WEB_URL:-http://127.0.0.1:8825}"
 register "crop_boxes" "${CROP_BOXES_URL:-http://127.0.0.1:8822}"
 register "read_qr_ocr" "${READ_QR_OCR_URL:-http://127.0.0.1:8819}"
 register "gemini_ocr" "${GEMINI_OCR_URL:-http://127.0.0.1:8820}"

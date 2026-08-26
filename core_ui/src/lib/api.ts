@@ -76,6 +76,7 @@ export interface Service {
   id: string
   name: string
   url: string
+  web_url?: string
   online: boolean
   last_seen_at?: string
 }
@@ -84,11 +85,28 @@ export function listServices(): Promise<Service[]> {
   return request<{ services: Service[] }>("/services").then((r) => r.services)
 }
 
-export function createService(name: string, url: string): Promise<Service> {
+export function createService(
+  name: string,
+  url: string,
+  webUrl?: string,
+): Promise<Service> {
   return request<Service>("/services", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, url }),
+    body: JSON.stringify({ name, url, web_url: webUrl || undefined }),
+  })
+}
+
+export function updateService(
+  id: string,
+  name: string,
+  url: string,
+  webUrl?: string,
+): Promise<Service> {
+  return request<Service>(`/services/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, url, web_url: webUrl || undefined }),
   })
 }
 

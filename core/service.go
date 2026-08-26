@@ -18,12 +18,14 @@ type ServiceMeta struct {
 	ID         string
 	Name       string
 	URL        string
+	WebURL     string
 	Online     bool
 	LastSeenAt time.Time // zero if never observed online
 }
 
-// createService registers a new service to monitor.
-func createService(app core.App, name, url string) (ServiceMeta, error) {
+// createService registers a new service to monitor. webURL is optional —
+// the service's own web app URL, iframed by core_ui (see AGENT.md).
+func createService(app core.App, name, url, webURL string) (ServiceMeta, error) {
 	collection, err := app.FindCollectionByNameOrId(servicesCollection)
 	if err != nil {
 		return ServiceMeta{}, fmt.Errorf("find services collection: %w", err)
@@ -32,6 +34,25 @@ func createService(app core.App, name, url string) (ServiceMeta, error) {
 	record := core.NewRecord(collection)
 	record.Set("name", name)
 	record.Set("url", url)
+	record.Set("web_url", webURL)
+	if err := app.Save(record); err != nil {
+		return ServiceMeta{}, fmt.Errorf("save service record: %w", err)
+	}
+
+	return recordToServiceMeta(record), nil
+}
+
+// updateService edits an existing service's registration (name, URL, and
+// web app URL). webURL is optional, same as in createService.
+func updateService(app core.App, id, name, url, webURL string) (ServiceMeta, error) {
+	record, err := app.FindRecordById(servicesCollection, id)
+	if err != nil {
+		return ServiceMeta{}, fmt.Errorf("service not found: %s", id)
+	}
+
+	record.Set("name", name)
+	record.Set("url", url)
+	record.Set("web_url", webURL)
 	if err := app.Save(record); err != nil {
 		return ServiceMeta{}, fmt.Errorf("save service record: %w", err)
 	}
@@ -67,6 +88,7 @@ func recordToServiceMeta(record *core.Record) ServiceMeta {
 		ID:         record.Id,
 		Name:       record.GetString("name"),
 		URL:        record.GetString("url"),
+		WebURL:     record.GetString("web_url"),
 		Online:     record.GetBool("online"),
 		LastSeenAt: record.GetDateTime("last_seen_at").Time(),
 	}

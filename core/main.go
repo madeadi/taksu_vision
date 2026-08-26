@@ -40,7 +40,7 @@ import (
 
 const defaultTTLHours = 24 * 7
 const defaultSweepIntervalMinutes = 60
-const defaultCorsAllowedOrigins = "http://localhost:5173"
+const defaultCorsAllowedOrigins = "http://localhost:5173,http://localhost:8825"
 
 type server struct {
 	root string
@@ -325,6 +325,14 @@ func (s *server) registerRoutes(api huma.API) {
 		Summary:     "List every monitored service",
 		Tags:        []string{"services"},
 	}, s.listServicesHandler)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "update-service",
+		Method:      http.MethodPatch,
+		Path:        "/services/{id}",
+		Summary:     "Edit a monitored service's registration",
+		Tags:        []string{"services"},
+	}, s.updateServiceHandler)
 
 	huma.Register(api, huma.Operation{
 		OperationID: "delete-service",
@@ -623,6 +631,7 @@ type ServiceSummary struct {
 	ID         string  `json:"id"`
 	Name       string  `json:"name"`
 	URL        string  `json:"url"`
+	WebURL     string  `json:"web_url,omitempty"`
 	Online     bool    `json:"online"`
 	LastSeenAt *string `json:"last_seen_at,omitempty" doc:"RFC3339 timestamp of the last successful health check; absent if never seen online"`
 }
@@ -632,6 +641,7 @@ func serviceSummary(meta ServiceMeta) ServiceSummary {
 		ID:     meta.ID,
 		Name:   meta.Name,
 		URL:    meta.URL,
+		WebURL: meta.WebURL,
 		Online: meta.Online,
 	}
 	if !meta.LastSeenAt.IsZero() {
@@ -643,8 +653,9 @@ func serviceSummary(meta ServiceMeta) ServiceSummary {
 
 type CreateServiceInput struct {
 	Body struct {
-		Name string `json:"name" required:"true" doc:"Display name" example:"split_pdf"`
-		URL  string `json:"url" required:"true" doc:"Base URL, health-checked at {url}/health" example:"http://localhost:8823"`
+		Name   string `json:"name" required:"true" doc:"Display name" example:"split_pdf"`
+		URL    string `json:"url" required:"true" doc:"Base URL, health-checked at {url}/health" example:"http://localhost:8823"`
+		WebURL string `json:"web_url,omitempty" doc:"Web app base URL, iframed by core_ui" example:"http://localhost:8825"`
 	}
 }
 
@@ -654,11 +665,32 @@ type CreateServiceOutput struct {
 }
 
 func (s *server) createServiceHandler(ctx context.Context, input *CreateServiceInput) (*CreateServiceOutput, error) {
-	meta, err := createService(s.app, input.Body.Name, input.Body.URL)
+	meta, err := createService(s.app, input.Body.Name, input.Body.URL, input.Body.WebURL)
 	if err != nil {
 		return nil, huma.Error400BadRequest(err.Error())
 	}
 	return &CreateServiceOutput{Status: http.StatusCreated, Body: serviceSummary(meta)}, nil
+}
+
+type UpdateServiceInput struct {
+	ID   string `path:"id" doc:"Service ID"`
+	Body struct {
+		Name   string `json:"name" required:"true" doc:"Display name" example:"split_pdf"`
+		URL    string `json:"url" required:"true" doc:"Base URL, health-checked at {url}/health" example:"http://localhost:8823"`
+		WebURL string `json:"web_url,omitempty" doc:"Web app base URL, iframed by core_ui" example:"http://localhost:8825"`
+	}
+}
+
+type UpdateServiceOutput struct {
+	Body ServiceSummary
+}
+
+func (s *server) updateServiceHandler(ctx context.Context, input *UpdateServiceInput) (*UpdateServiceOutput, error) {
+	meta, err := updateService(s.app, input.ID, input.Body.Name, input.Body.URL, input.Body.WebURL)
+	if err != nil {
+		return nil, huma.Error404NotFound(err.Error())
+	}
+	return &UpdateServiceOutput{Body: serviceSummary(meta)}, nil
 }
 
 type ListServicesOutput struct {
