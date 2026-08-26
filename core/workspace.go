@@ -1,26 +1,31 @@
 // Workspace lifecycle: on-disk layout, creation, metadata, path resolution,
-// listing, and deletion. No HTTP concerns — see main.go for handlers.
+// listing, and deletion. Metadata (workspace_id/created_at/expires_at) lives
+// in the embedded PocketBase/SQLite "workspaces" collection (see
+// migrations/0001_create_workspaces.go); actual files stay on shared disk.
+// No HTTP concerns — see main.go for handlers.
 package main
 
 import (
 	"crypto/rand"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/pocketbase/dbx"
+	"github.com/pocketbase/pocketbase/core"
 )
 
-const metaFileName = ".workspace.json"
 const filesDirName = "files"
+const workspacesCollection = "workspaces"
 
-// WorkspaceMeta is the on-disk record of a workspace's lifecycle, stored as
-// {workspaceDir}/.workspace.json.
+// WorkspaceMeta is a workspace's lifecycle record, stored in the
+// "workspaces" PocketBase collection.
 type WorkspaceMeta struct {
-	WorkspaceID string    `json:"workspace_id"`
-	CreatedAt   time.Time `json:"created_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
+	WorkspaceID string
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
 }
 
 // FileEntry describes one file inside a workspace, path relative to its
@@ -49,13 +54,10 @@ func filesDir(root, id string) string {
 	return filepath.Join(workspaceDir(root, id), filesDirName)
 }
 
-func metaPath(root, id string) string {
-	return filepath.Join(workspaceDir(root, id), metaFileName)
-}
-
 // createWorkspace creates a new workspace directory (with its files/
-// subdirectory) under root and records its creation/expiry metadata.
-func createWorkspace(root string, ttl time.Duration) (WorkspaceMeta, error) {
+// subdirectory) under root and records its creation/expiry metadata in
+// PocketBase.
+func createWorkspace(app core.App, root string, ttl time.Duration) (WorkspaceMeta, error) {
 	id, err := newWorkspaceID()
 	if err != nil {
 		return WorkspaceMeta{}, fmt.Errorf("generate workspace id: %w", err)
@@ -63,54 +65,69 @@ func createWorkspace(root string, ttl time.Duration) (WorkspaceMeta, error) {
 	if err := os.MkdirAll(filesDir(root, id), 0o755); err != nil {
 		return WorkspaceMeta{}, fmt.Errorf("create workspace dir: %w", err)
 	}
-	now := time.Now().UTC()
-	meta := WorkspaceMeta{
-		WorkspaceID: id,
-		CreatedAt:   now,
-		ExpiresAt:   now.Add(ttl),
-	}
-	if err := writeWorkspaceMeta(root, id, meta); err != nil {
-		return WorkspaceMeta{}, err
-	}
-	return meta, nil
-}
 
-func writeWorkspaceMeta(root, id string, meta WorkspaceMeta) error {
-	f, err := os.Create(metaPath(root, id))
+	collection, err := app.FindCollectionByNameOrId(workspacesCollection)
 	if err != nil {
-		return fmt.Errorf("write workspace metadata: %w", err)
+		return WorkspaceMeta{}, fmt.Errorf("find workspaces collection: %w", err)
 	}
-	defer f.Close()
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	return enc.Encode(meta)
+
+	now := time.Now().UTC()
+	expiresAt := now.Add(ttl)
+
+	record := core.NewRecord(collection)
+	record.Set("workspace_id", id)
+	record.Set("created_at", now)
+	record.Set("expires_at", expiresAt)
+	if err := app.Save(record); err != nil {
+		return WorkspaceMeta{}, fmt.Errorf("save workspace record: %w", err)
+	}
+
+	return WorkspaceMeta{WorkspaceID: id, CreatedAt: now, ExpiresAt: expiresAt}, nil
 }
 
-// loadWorkspaceMeta reads a workspace's metadata. Returns an error if the
-// workspace doesn't exist.
-func loadWorkspaceMeta(root, id string) (WorkspaceMeta, error) {
-	if _, err := os.Stat(filesDir(root, id)); err != nil {
+// loadWorkspaceMeta reads a workspace's metadata from PocketBase. Returns an
+// error if the workspace doesn't exist.
+func loadWorkspaceMeta(app core.App, id string) (WorkspaceMeta, error) {
+	record, err := app.FindFirstRecordByFilter(workspacesCollection, "workspace_id = {:id}", dbx.Params{"id": id})
+	if err != nil {
 		return WorkspaceMeta{}, fmt.Errorf("workspace not found: %s", id)
 	}
-	data, err := os.ReadFile(metaPath(root, id))
-	if err != nil {
-		// files/ exists but metadata is missing/unreadable: treat as expired
-		// immediately so a corrupt workspace doesn't linger indefinitely.
-		return WorkspaceMeta{}, fmt.Errorf("workspace metadata unreadable: %s: %w", id, err)
-	}
-	var meta WorkspaceMeta
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return WorkspaceMeta{}, fmt.Errorf("workspace metadata corrupt: %s: %w", id, err)
-	}
-	return meta, nil
+	return recordToMeta(record), nil
 }
 
-// deleteWorkspace removes a workspace directory entirely.
-func deleteWorkspace(root, id string) error {
-	if _, err := os.Stat(workspaceDir(root, id)); err != nil {
+// listWorkspaces returns metadata for every workspace, in no particular
+// order.
+func listWorkspaces(app core.App) ([]WorkspaceMeta, error) {
+	records, err := app.FindAllRecords(workspacesCollection)
+	if err != nil {
+		return nil, fmt.Errorf("list workspaces: %w", err)
+	}
+	metas := make([]WorkspaceMeta, 0, len(records))
+	for _, record := range records {
+		metas = append(metas, recordToMeta(record))
+	}
+	return metas, nil
+}
+
+func recordToMeta(record *core.Record) WorkspaceMeta {
+	return WorkspaceMeta{
+		WorkspaceID: record.GetString("workspace_id"),
+		CreatedAt:   record.GetDateTime("created_at").Time(),
+		ExpiresAt:   record.GetDateTime("expires_at").Time(),
+	}
+}
+
+// deleteWorkspace removes a workspace's directory entirely and deletes its
+// PocketBase record.
+func deleteWorkspace(app core.App, root, id string) error {
+	record, err := app.FindFirstRecordByFilter(workspacesCollection, "workspace_id = {:id}", dbx.Params{"id": id})
+	if err != nil {
 		return fmt.Errorf("workspace not found: %s", id)
 	}
-	return os.RemoveAll(workspaceDir(root, id))
+	if err := os.RemoveAll(workspaceDir(root, id)); err != nil {
+		return fmt.Errorf("remove workspace dir: %w", err)
+	}
+	return app.Delete(record)
 }
 
 // listWorkspaceFiles walks a workspace's files/ dir (or a subdir of it, if

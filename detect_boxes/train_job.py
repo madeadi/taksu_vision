@@ -85,6 +85,18 @@ def main() -> None:
             metrics=metrics,
             weights_out=str(weights_out),
         )
+
+        try:
+            import weights as weight_registry
+
+            map50 = metrics.get("metrics/mAP50(B)") or metrics.get("metrics/mAP50(OBB)")
+            description = f"{args.epochs} epochs from {Path(args.base_weights).name}"
+            if map50 is not None:
+                description += f", mAP50={map50}"
+            weight_registry.register_weight(job_dir.name, description, str(weights_out))
+        except Exception:
+            # Registry bookkeeping must not flip a succeeded job to failed.
+            traceback.print_exc()
     except Exception:
         write_status(
             status_path,

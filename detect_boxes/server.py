@@ -16,6 +16,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from ultralytics import YOLO
 
 import train
+import weights as weight_registry
 from detector import IMG_EXTS, detect
 from workspace import resolve_workspace_path, workspace_root_from_env
 
@@ -79,6 +80,18 @@ app = FastAPI(
 @app.get("/health")
 def health():
     return {"status": "ok", "device": state.get("device")}
+
+
+@app.get("/weights")
+def list_weights():
+    return {"weights": weight_registry.list_weights()}
+
+
+@app.delete("/weights/{name}")
+def delete_weight(name: str):
+    if not weight_registry.delete_weight(name):
+        raise HTTPException(404, f"weight not found: {name!r}")
+    return {"deleted": name}
 
 
 @app.post("/tasks")

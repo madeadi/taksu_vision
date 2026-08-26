@@ -143,3 +143,12 @@ box's `box_index`, `is_obb`, `xyxy`, `polygon` are exactly the fields that
 service expects) to get rectified crop files. This same response body is
 also written to `json_output_path` when it's provided; otherwise it's only
 returned in the HTTP response, not saved to disk.
+
+### `GET /weights` / `DELETE /weights/{name}`
+
+A JSON-backed registry (`weights.json`, global to this service — not scoped
+per workspace) of trained model weights, each `{"name", "description",
+"path"}`. Entries are added automatically when a `/train` job succeeds
+(`name` is the job id, `path` the absolute path to the written weights
+file) — there's no register endpoint. `DELETE` removes the registry entry
+only; the weights file on disk is left in place.

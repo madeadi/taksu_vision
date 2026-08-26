@@ -19,6 +19,29 @@ input/output structs in `main.go` rather than hand-maintained. None of the
 other (Python/FastAPI) services need this since FastAPI already generates
 their `/docs`/`/openapi.json` for free.
 
+Workspace *metadata* (`workspace_id`/`created_at`/`expires_at`) is stored in
+an embedded [PocketBase](https://pocketbase.io) instance (SQLite, with Go
+migrations under `migrations/`) — used here purely as a Go framework/data
+layer, not as a separate service. This is what backs the `GET /workspaces`
+list endpoint. Workspace *files* are unaffected: they still live on shared
+disk at `$WORKSPACE_ROOT/{workspace_id}/files/`, read/written directly by
+every other service exactly as before. PocketBase's own admin UI (SQLite
+browser, etc.) is available at `/_/` for ops/debugging, and its
+auto-generated REST API at `/api/collections/...` — neither is part of the
+documented API surface the [`core_ui`](../core_ui) frontend or other
+services should rely on; use the huma-documented endpoints below instead.
+
+To log into `/_/`, create a superuser account first:
+
+```bash
+go run . superuser upsert you@example.com yourpassword
+```
+
+(The one-time installer link printed on first boot is tied to that specific
+server process — restarting `core` before opening it, or reopening an old
+link from a previous run's logs, fails with "Only superusers can perform
+this action". `superuser upsert` always works, regardless of restarts.)
+
 ## Setup
 
 Requires Go 1.25+.
@@ -42,19 +65,22 @@ Swagger UI / interactive docs at `/docs` (OpenAPI schema at `/openapi.json`).
 | `WORKSPACE_ROOT` | — | Shared-disk directory workspaces live under. Required — the server refuses to start without it. Every other service must be started with the same value. |
 | `TTL_HOURS` | `168` (7 days) | How long a workspace lives after creation before the sweep removes it. |
 | `SWEEP_INTERVAL_MINUTES` | `60` | How often the background sweep checks for expired workspaces. |
+| `DB_DIR` | `./pb_data` | Directory for the embedded PocketBase/SQLite metadata store. Deliberately separate from `WORKSPACE_ROOT` — it must not live under it. |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | Comma-separated list of origins allowed to call this API cross-origin (e.g. the `core_ui` dev/prod origin). |
 
 ## On-disk layout
 
 ```
 $WORKSPACE_ROOT/
   {workspace_id}/
-    .workspace.json      # {workspace_id, created_at, expires_at}
     files/                # everything every service's relative-path params resolve against
 ```
 
 `{workspace_id}` is a UUIDv4. Other services resolve their path params as
 `$WORKSPACE_ROOT/{workspace_id}/files/{relative_path}`, rejecting absolute
 paths and anything that would escape `files/` (directly or via a symlink).
+Metadata (`created_at`/`expires_at`) for each `{workspace_id}` lives in the
+`workspaces` table under `$DB_DIR`, not on disk under the workspace itself.
 
 ## TTL sweep
 
@@ -120,6 +146,20 @@ the path doesn't exist within it.
 Downloads the whole workspace (or just `dir`, if given) as a `.zip`,
 streamed directly — no temp file. `404` if the workspace or `dir` doesn't
 exist.
+
+### `GET /workspaces`
+
+Lists every workspace's metadata (no file listing — use `GET /workspaces/{id}`
+for that).
+
+```jsonc
+// 200
+{
+  "workspaces": [
+    {"workspace_id": "550e8400-...", "created_at": "2026-08-24T08:00:00Z", "expires_at": "2026-08-31T08:00:00Z"}
+  ]
+}
+```
 
 ### `GET /workspaces/{id}`
 

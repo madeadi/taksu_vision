@@ -30,20 +30,50 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
+	"github.com/pocketbase/pocketbase"
+	"github.com/pocketbase/pocketbase/apis"
+	"github.com/pocketbase/pocketbase/cmd"
+	"github.com/pocketbase/pocketbase/core"
+
+	_ "vision.taksu.tech/core/migrations"
 )
 
 const defaultTTLHours = 24 * 7
 const defaultSweepIntervalMinutes = 60
+const defaultCorsAllowedOrigins = "http://localhost:5173"
 
 type server struct {
 	root string
 	ttl  time.Duration
+	app  core.App
 }
 
 func main() {
 	host := flag.String("host", "0.0.0.0", "address to listen on")
 	port := flag.Int("port", 8824, "port to listen on")
 	flag.Parse()
+
+	// PocketBase's own SQLite data dir: deliberately NOT under
+	// WORKSPACE_ROOT, since the sweep and other workspace logic treat every
+	// entry there as a workspace directory.
+	dbDir := os.Getenv("DB_DIR")
+	if dbDir == "" {
+		dbDir = "./pb_data"
+	}
+
+	pb := pocketbase.NewWithConfig(pocketbase.Config{DefaultDataDir: dbDir})
+
+	// `core superuser upsert email pass` creates/updates an admin account
+	// for the bundled PocketBase dashboard at /_/ — registered explicitly
+	// since we skip pb.Start()/pb.Execute()'s default command set below in
+	// favor of our own --host/--port-driven serve flow.
+	pb.RootCmd.AddCommand(cmd.NewSuperuserCommand(pb))
+	if flag.NArg() > 0 {
+		if err := pb.Execute(); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	workspaceRoot := os.Getenv("WORKSPACE_ROOT")
 	if workspaceRoot == "" {
@@ -56,9 +86,17 @@ func main() {
 	ttl := time.Duration(envInt("TTL_HOURS", defaultTTLHours)) * time.Hour
 	sweepInterval := time.Duration(envInt("SWEEP_INTERVAL_MINUTES", defaultSweepIntervalMinutes)) * time.Minute
 
-	srv := &server{root: workspaceRoot, ttl: ttl}
+	if err := pb.Bootstrap(); err != nil {
+		log.Fatalf("bootstrap pocketbase: %v", err)
+	}
+	if err := pb.RunAppMigrations(); err != nil {
+		log.Fatalf("run migrations: %v", err)
+	}
 
-	go startSweep(workspaceRoot, sweepInterval, ttl)
+	srv := &server{root: workspaceRoot, ttl: ttl, app: pb}
+
+	go startSweep(pb, workspaceRoot, sweepInterval, ttl)
+	go startHealthCheck(pb)
 
 	mux := http.NewServeMux()
 	config := huma.DefaultConfig("Taksu Vision Core", "1.0.0")
@@ -71,11 +109,41 @@ func main() {
 	srv.registerRoutes(api)
 	mux.HandleFunc("/", indexHandler(otherServices()))
 
+	// Mount the huma-built mux (health/docs/workspaces/files) as a fallback
+	// under PocketBase's router, alongside PocketBase's own /api/* and /_/*
+	// routes (admin UI + auto REST API), which take precedence since they're
+	// more specific patterns.
+	pb.OnServe().BindFunc(func(se *core.ServeEvent) error {
+		se.Router.Any("/{path...}", apis.WrapStdHandler(mux))
+		return se.Next()
+	})
+
 	addr := fmt.Sprintf("%s:%d", *host, *port)
-	log.Printf("core listening on %s (WORKSPACE_ROOT=%s, ttl=%s, docs at /docs)", addr, workspaceRoot, ttl)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	log.Printf("core listening on %s (WORKSPACE_ROOT=%s, ttl=%s, db=%s, docs at /docs)", addr, workspaceRoot, ttl, dbDir)
+	if err := apis.Serve(pb, apis.ServeConfig{
+		HttpAddr:        addr,
+		AllowedOrigins:  corsAllowedOrigins(),
+		ShowStartBanner: false,
+	}); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// corsAllowedOrigins reads CORS_ALLOWED_ORIGINS as a comma-separated list of
+// origins allowed to call this API cross-origin (e.g. the workspace
+// management UI's dev/prod origin). Defaults to the Vite dev server origin.
+func corsAllowedOrigins() []string {
+	v := os.Getenv("CORS_ALLOWED_ORIGINS")
+	if v == "" {
+		v = defaultCorsAllowedOrigins
+	}
+	var origins []string
+	for _, o := range strings.Split(v, ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			origins = append(origins, o)
+		}
+	}
+	return origins
 }
 
 func envInt(name string, def int) int {
@@ -195,6 +263,14 @@ func (s *server) registerRoutes(api huma.API) {
 	}, s.createWorkspaceHandler)
 
 	huma.Register(api, huma.Operation{
+		OperationID: "list-workspaces",
+		Method:      http.MethodGet,
+		Path:        "/workspaces",
+		Summary:     "List every workspace",
+		Tags:        []string{"workspaces"},
+	}, s.listWorkspacesHandler)
+
+	huma.Register(api, huma.Operation{
 		OperationID: "get-workspace",
 		Method:      http.MethodGet,
 		Path:        "/workspaces/{id}",
@@ -233,6 +309,30 @@ func (s *server) registerRoutes(api huma.API) {
 		Summary:     "Download a workspace (or a subdirectory of it) as a zip archive",
 		Tags:        []string{"files"},
 	}, s.downloadArchiveHandler)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "create-service",
+		Method:      http.MethodPost,
+		Path:        "/services",
+		Summary:     "Register a service to monitor",
+		Tags:        []string{"services"},
+	}, s.createServiceHandler)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "list-services",
+		Method:      http.MethodGet,
+		Path:        "/services",
+		Summary:     "List every monitored service",
+		Tags:        []string{"services"},
+	}, s.listServicesHandler)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "delete-service",
+		Method:      http.MethodDelete,
+		Path:        "/services/{id}",
+		Summary:     "Stop monitoring a service",
+		Tags:        []string{"services"},
+	}, s.deleteServiceHandler)
 }
 
 // --- health ---
@@ -246,14 +346,10 @@ type HealthOutput struct {
 }
 
 func (s *server) healthHandler(ctx context.Context, input *struct{}) (*HealthOutput, error) {
-	entries, err := os.ReadDir(s.root)
+	metas, err := listWorkspaces(s.app)
 	count := 0
 	if err == nil {
-		for _, e := range entries {
-			if e.IsDir() {
-				count++
-			}
-		}
+		count = len(metas)
 	}
 	resp := &HealthOutput{}
 	resp.Body.Status = "ok"
@@ -274,7 +370,7 @@ type CreateWorkspaceOutput struct {
 }
 
 func (s *server) createWorkspaceHandler(ctx context.Context, input *struct{}) (*CreateWorkspaceOutput, error) {
-	meta, err := createWorkspace(s.root, s.ttl)
+	meta, err := createWorkspace(s.app, s.root, s.ttl)
 	if err != nil {
 		return nil, huma.Error500InternalServerError(err.Error())
 	}
@@ -282,6 +378,37 @@ func (s *server) createWorkspaceHandler(ctx context.Context, input *struct{}) (*
 	resp.Body.WorkspaceID = meta.WorkspaceID
 	resp.Body.CreatedAt = meta.CreatedAt.Format(time.RFC3339Nano)
 	resp.Body.ExpiresAt = meta.ExpiresAt.Format(time.RFC3339Nano)
+	return resp, nil
+}
+
+// --- list workspaces ---
+
+type WorkspaceSummary struct {
+	WorkspaceID string `json:"workspace_id"`
+	CreatedAt   string `json:"created_at"`
+	ExpiresAt   string `json:"expires_at"`
+}
+
+type ListWorkspacesOutput struct {
+	Body struct {
+		Workspaces []WorkspaceSummary `json:"workspaces"`
+	}
+}
+
+func (s *server) listWorkspacesHandler(ctx context.Context, input *struct{}) (*ListWorkspacesOutput, error) {
+	metas, err := listWorkspaces(s.app)
+	if err != nil {
+		return nil, huma.Error500InternalServerError(err.Error())
+	}
+	resp := &ListWorkspacesOutput{}
+	resp.Body.Workspaces = make([]WorkspaceSummary, 0, len(metas))
+	for _, meta := range metas {
+		resp.Body.Workspaces = append(resp.Body.Workspaces, WorkspaceSummary{
+			WorkspaceID: meta.WorkspaceID,
+			CreatedAt:   meta.CreatedAt.Format(time.RFC3339Nano),
+			ExpiresAt:   meta.ExpiresAt.Format(time.RFC3339Nano),
+		})
+	}
 	return resp, nil
 }
 
@@ -301,7 +428,7 @@ type GetWorkspaceOutput struct {
 }
 
 func (s *server) getWorkspaceHandler(ctx context.Context, input *WorkspaceIDInput) (*GetWorkspaceOutput, error) {
-	meta, err := loadWorkspaceMeta(s.root, input.ID)
+	meta, err := loadWorkspaceMeta(s.app, input.ID)
 	if err != nil {
 		return nil, huma.Error404NotFound(err.Error())
 	}
@@ -327,7 +454,7 @@ type DeleteWorkspaceOutput struct {
 }
 
 func (s *server) deleteWorkspaceHandler(ctx context.Context, input *WorkspaceIDInput) (*DeleteWorkspaceOutput, error) {
-	if err := deleteWorkspace(s.root, input.ID); err != nil {
+	if err := deleteWorkspace(s.app, s.root, input.ID); err != nil {
 		return nil, huma.Error404NotFound(err.Error())
 	}
 	resp := &DeleteWorkspaceOutput{}
@@ -361,7 +488,7 @@ type UploadFilesOutput struct {
 }
 
 func (s *server) uploadFilesHandler(ctx context.Context, input *UploadFilesInput) (*UploadFilesOutput, error) {
-	if _, err := loadWorkspaceMeta(s.root, input.ID); err != nil {
+	if _, err := loadWorkspaceMeta(s.app, input.ID); err != nil {
 		return nil, huma.Error404NotFound(err.Error())
 	}
 
@@ -488,4 +615,88 @@ func (s *server) downloadArchiveHandler(ctx context.Context, input *DownloadArch
 			}
 		},
 	}, nil
+}
+
+// --- services ---
+
+type ServiceSummary struct {
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	URL        string  `json:"url"`
+	Online     bool    `json:"online"`
+	LastSeenAt *string `json:"last_seen_at,omitempty" doc:"RFC3339 timestamp of the last successful health check; absent if never seen online"`
+}
+
+func serviceSummary(meta ServiceMeta) ServiceSummary {
+	summary := ServiceSummary{
+		ID:     meta.ID,
+		Name:   meta.Name,
+		URL:    meta.URL,
+		Online: meta.Online,
+	}
+	if !meta.LastSeenAt.IsZero() {
+		formatted := meta.LastSeenAt.Format(time.RFC3339Nano)
+		summary.LastSeenAt = &formatted
+	}
+	return summary
+}
+
+type CreateServiceInput struct {
+	Body struct {
+		Name string `json:"name" required:"true" doc:"Display name" example:"split_pdf"`
+		URL  string `json:"url" required:"true" doc:"Base URL, health-checked at {url}/health" example:"http://localhost:8823"`
+	}
+}
+
+type CreateServiceOutput struct {
+	Status int
+	Body   ServiceSummary
+}
+
+func (s *server) createServiceHandler(ctx context.Context, input *CreateServiceInput) (*CreateServiceOutput, error) {
+	meta, err := createService(s.app, input.Body.Name, input.Body.URL)
+	if err != nil {
+		return nil, huma.Error400BadRequest(err.Error())
+	}
+	return &CreateServiceOutput{Status: http.StatusCreated, Body: serviceSummary(meta)}, nil
+}
+
+type ListServicesOutput struct {
+	Body struct {
+		Services []ServiceSummary `json:"services"`
+	}
+}
+
+func (s *server) listServicesHandler(ctx context.Context, input *struct{}) (*ListServicesOutput, error) {
+	metas, err := listServices(s.app)
+	if err != nil {
+		return nil, huma.Error500InternalServerError(err.Error())
+	}
+	resp := &ListServicesOutput{}
+	resp.Body.Services = make([]ServiceSummary, 0, len(metas))
+	for _, meta := range metas {
+		resp.Body.Services = append(resp.Body.Services, serviceSummary(meta))
+	}
+	return resp, nil
+}
+
+type ServiceIDInput struct {
+	ID string `path:"id" doc:"Service ID"`
+}
+
+type DeleteServiceOutput struct {
+	Body struct {
+		ID      string `json:"id"`
+		Deleted bool   `json:"deleted"`
+	}
+}
+
+func (s *server) deleteServiceHandler(ctx context.Context, input *ServiceIDInput) (*DeleteServiceOutput, error) {
+	if err := deleteService(s.app, input.ID); err != nil {
+		return nil, huma.Error404NotFound(err.Error())
+	}
+	resp := &DeleteServiceOutput{}
+	resp.Body.ID = input.ID
+	resp.Body.Deleted = true
+	return resp, nil
 }

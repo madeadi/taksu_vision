@@ -48,3 +48,13 @@ composer.phar
 
 # scripts/run_pipeline.sh's runtime dir (logs, default workspace root)
 /.run/
+
+# core's embedded PocketBase SQLite data dir
+core/pb_data/
+
+# detect_boxes's trained-weights registry (runtime state)
+detect_boxes/weights.json
+
+# Node / frontend (core_ui)
+node_modules/
+dist/
