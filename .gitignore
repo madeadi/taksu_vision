@@ -38,6 +38,9 @@ composer.phar
 .env.*
 !.env.example
 
+# gemini_ocr's YAML config (deployment-specific; config.example.yaml is checked in)
+gemini_ocr/config.yaml
+
 # Model weights / large artifacts
 *.pt
 *.onnx

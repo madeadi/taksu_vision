@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,10 +28,8 @@ var mimeTypes = map[string]string{
 	".webp": "image/webp",
 }
 
-const defaultPrompt = "Read all text visible in this image. Return only the text you see, " +
-	"exactly as it appears, with no commentary, labels, or formatting. " +
-	"Return it as a single line, with each piece of text separated by a " +
-	"single space. If no text is visible, return an empty string."
+const defaultInstruction = "Read all text visible in this image, exactly as it appears. " +
+	"Include every piece of text you can see, in the order it appears, top to bottom and left to right."
 
 type modelPrice struct {
 	Input, Output float64 // USD per 1M tokens
@@ -60,13 +59,23 @@ func costUSD(model string, inputTokens, outputTokens int32) (float64, bool) {
 // ...) is captured in Error instead of aborting the batch, so one bad image
 // doesn't abort the rest.
 type OCRResult struct {
-	Image        string   `json:"image"`
-	ImageName    string   `json:"image_name"`
-	Text         *string  `json:"text"`
-	InputTokens  *int32   `json:"input_tokens"`
-	OutputTokens *int32   `json:"output_tokens"`
-	CostUSD      *float64 `json:"cost_usd"`
-	Error        *string  `json:"error"`
+	Image           string         `json:"image"`
+	ImageName       string         `json:"image_name"`
+	DetectedText    *string        `json:"detected_text"`
+	MatchedPatterns []string       `json:"matched_patterns"`
+	FormattedOutput map[string]any `json:"formatted_output"`
+	InputTokens     *int32         `json:"input_tokens"`
+	OutputTokens    *int32         `json:"output_tokens"`
+	CostUSD         *float64       `json:"cost_usd"`
+	Error           *string        `json:"error"`
+}
+
+// ocrModelReply is the shape ocrOne unmarshals the model's JSON reply into
+// (enforced only by the prompt's closingInstruction, not a genai.Schema).
+type ocrModelReply struct {
+	DetectedText    string         `json:"detected_text"`
+	MatchedPatterns []string       `json:"matched_patterns"`
+	FormattedOutput map[string]any `json:"formatted_output"`
 }
 
 func ocrOne(ctx context.Context, client *genai.Client, imagePath, model, prompt string) OCRResult {
@@ -89,15 +98,32 @@ func ocrOne(ctx context.Context, client *genai.Client, imagePath, model, prompt 
 	}
 	content := []*genai.Content{genai.NewContentFromParts(parts, genai.RoleUser)}
 
-	response, err := client.Models.GenerateContent(ctx, model, content, nil)
+	config := &genai.GenerateContentConfig{ResponseMIMEType: "application/json"}
+	response, err := client.Models.GenerateContent(ctx, model, content, config)
 	if err != nil {
 		errStr := err.Error()
 		result.Error = &errStr
 		return result
 	}
 
-	text := strings.Join(strings.Fields(response.Text()), " ")
-	result.Text = &text
+	var parsed ocrModelReply
+	if jsonErr := json.Unmarshal([]byte(response.Text()), &parsed); jsonErr != nil {
+		errStr := "invalid JSON response from model: " + jsonErr.Error()
+		result.Error = &errStr
+		// Fall through: the API call succeeded and consumed tokens even
+		// though the reply was malformed, so still capture usage/cost below.
+	} else {
+		detectedText := parsed.DetectedText
+		result.DetectedText = &detectedText
+		result.MatchedPatterns = parsed.MatchedPatterns
+		if result.MatchedPatterns == nil {
+			result.MatchedPatterns = []string{}
+		}
+		result.FormattedOutput = parsed.FormattedOutput
+		if result.FormattedOutput == nil {
+			result.FormattedOutput = map[string]any{}
+		}
+	}
 
 	if usage := response.UsageMetadata; usage != nil {
 		inputTokens := usage.PromptTokenCount

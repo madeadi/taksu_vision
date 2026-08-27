@@ -55,3 +55,10 @@ It's preferred to serve at `/web`.
 It will be used to manage the services. Services will be registered with the core. It will register: 
 - URL of the API. It will be assumed that the health endpoint is at `/health`.
 - URL of the web app
+
+# Golang
+These are the instructions for golang based code:
+- For configuration, use viper
+- Provide endpoints to refresh the config once the yaml file is updated.
+- create config.example.yaml file with the environment variables required by the service.
+- don't commit config.yaml.

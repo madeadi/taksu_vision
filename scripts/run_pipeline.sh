@@ -69,6 +69,15 @@ wait_for_health() {
   exit 1
 }
 
+# Reads a top-level "key: value" scalar out of a simple YAML file (good
+# enough for gemini_ocr/config.yaml's flat shape; not a general YAML parser).
+# Strips surrounding quotes. Prints nothing if the file or key is absent.
+yaml_get() {
+  local file="$1" key="$2"
+  [[ -f "$file" ]] || return 0
+  awk -F': *' -v k="$key" '$1==k {v=$2; gsub(/^"|"$/, "", v); print v; exit}' "$file"
+}
+
 echo "==> starting core server on :$CORE_PORT"
 (
   cd "$CORE_DIR"
@@ -116,10 +125,26 @@ pids+=($!)
 wait_for_health "$READ_QR_OCR_URL" "read_qr_ocr"
 
 if [[ "$RUN_GEMINI_OCR" == "true" ]]; then
-  if [[ -z "${GEMINI_API_KEY:-}" && -z "${GOOGLE_API_KEY:-}" ]]; then
-    echo "error: RUN_GEMINI_OCR=true but GEMINI_API_KEY (or GOOGLE_API_KEY) is not set" >&2
+  # gemini_ocr also accepts config.yaml (see gemini_ocr/README.md's
+  # Configuration section); config.yaml values win over env vars there, so
+  # check it too instead of just the env vars this script itself sets.
+  GEMINI_OCR_CONFIG="$GEMINI_OCR_DIR/config.yaml"
+  GEMINI_OCR_CONFIG_API_KEY="$(yaml_get "$GEMINI_OCR_CONFIG" gemini_api_key)"
+  if [[ -z "${GEMINI_API_KEY:-}" && -z "${GOOGLE_API_KEY:-}" && -z "$GEMINI_OCR_CONFIG_API_KEY" ]]; then
+    echo "error: RUN_GEMINI_OCR=true but GEMINI_API_KEY (or GOOGLE_API_KEY) is not set, and $GEMINI_OCR_CONFIG has no gemini_api_key" >&2
     exit 1
   fi
+
+  # config.yaml's workspace_root, if set, overrides this script's
+  # WORKSPACE_ROOT for gemini_ocr specifically — every other service uses
+  # $WORKSPACE_ROOT directly, so a mismatch here would silently split
+  # gemini_ocr onto a different workspace disk than the rest of the pipeline.
+  GEMINI_OCR_CONFIG_WORKSPACE_ROOT="$(yaml_get "$GEMINI_OCR_CONFIG" workspace_root)"
+  if [[ -n "$GEMINI_OCR_CONFIG_WORKSPACE_ROOT" && "$GEMINI_OCR_CONFIG_WORKSPACE_ROOT" != "$WORKSPACE_ROOT" ]]; then
+    echo "error: $GEMINI_OCR_CONFIG's workspace_root ($GEMINI_OCR_CONFIG_WORKSPACE_ROOT) does not match WORKSPACE_ROOT ($WORKSPACE_ROOT) used by every other service" >&2
+    exit 1
+  fi
+
   echo "==> starting gemini_ocr server on :$GEMINI_OCR_PORT"
   (
     cd "$GEMINI_OCR_DIR"

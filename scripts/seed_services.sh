@@ -47,6 +47,6 @@ register "split_pdf" "${SPLIT_PDF_URL:-http://127.0.0.1:8823}"
 register "detect_boxes" "${DETECT_BOXES_URL:-http://127.0.0.1:8821}" "${DETECT_BOXES_WEB_URL:-http://127.0.0.1:8825}"
 register "crop_boxes" "${CROP_BOXES_URL:-http://127.0.0.1:8822}"
 register "read_qr_ocr" "${READ_QR_OCR_URL:-http://127.0.0.1:8819}"
-register "gemini_ocr" "${GEMINI_OCR_URL:-http://127.0.0.1:8820}"
+register "gemini_ocr" "${GEMINI_OCR_URL:-http://127.0.0.1:8820}" "${GEMINI_OCR_WEB_URL:-http://127.0.0.1:8820/web}"
 
 echo "==> done"
