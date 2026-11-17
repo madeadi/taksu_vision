@@ -1,0 +1,5 @@
+node_modules
+dist
+*.tsbuildinfo
+# Large model weights; fetch with `npm run models`.
+public/models/*.onnx
