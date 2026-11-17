@@ -35,6 +35,15 @@ The one exception is `core/`, which owns workspace lifecycle
 compute task — it implements `GET /health` plus a small CRUD REST API
 instead of `POST /tasks`.
 
+The other exceptions are the browser-only demos, `zxing_wasm/` (port 8830) and
+`paddle_ocr_onnx/` (port 8831). They are static Vite apps that decode QR codes
+(zxing-cpp) and run OCR (PP-OCRv4 on onnxruntime-web) entirely in the browser,
+with no backend, `/tasks` or workspace. They are not part of the protobuf
+service contract; the dev server's SPA fallback happens to answer
+`GET /health` with 200, so core's health check sees them as online. See each
+folder's README. `scripts/run_pipeline.sh` starts both (disable with
+`RUN_ZXING_WASM=false` / `RUN_PADDLE_OCR_ONNX=false`).
+
 Service shall output a response with the following data structure: 
 - input
 - output
