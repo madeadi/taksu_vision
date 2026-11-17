@@ -1,4 +1,4 @@
-"""FastAPI microservice: barcode decode (Data Matrix / Aztec) + OCR fallback
+"""FastAPI microservice: barcode decode (QR / Data Matrix / Aztec) + OCR fallback
 for crop files.
 
 Takes already-detected, already-straightened crop image files as input
@@ -38,7 +38,7 @@ if OCR_ENGINE not in OCR_ENGINES:
 app = FastAPI(
     title="Read QR OCR",
     description=(
-        "Barcode decoding (Data Matrix / Aztec) for already-cropped label "
+        "Barcode decoding (QR / Data Matrix / Aztec) for already-cropped label "
         "images, across a preprocessing ensemble (raw, CLAHE, upscaled, "
         "Otsu/adaptive threshold), with an optional OCR fallback "
         f"(`run_ocr=true`, engine configured via OCR_ENGINE — currently "

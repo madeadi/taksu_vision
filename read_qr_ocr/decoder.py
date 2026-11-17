@@ -10,10 +10,15 @@ import zxingcpp
 
 from entry import CropEntry
 
-# Preserve the formats used by the existing pipeline output behavior.
+# Symbologies zxing-cpp is asked to look for. Restricting the set (instead of
+# accepting every format) keeps decoding fast and avoids false positives from
+# 1D formats on noisy crops.
 BARCODE_FORMATS = (
     zxingcpp.BarcodeFormat.DataMatrix
     | zxingcpp.BarcodeFormat.Aztec
+    | zxingcpp.BarcodeFormat.QRCode
+    | zxingcpp.BarcodeFormat.MicroQRCode
+    | zxingcpp.BarcodeFormat.RMQRCode
 )
 CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 SERIAL_STRICT = re.compile(r"\b[A-Z]{2}\d{2}-\d{5}\b")

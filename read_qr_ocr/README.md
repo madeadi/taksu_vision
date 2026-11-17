@@ -1,6 +1,6 @@
 # read_qr_ocr
 
-Barcode decoding (Data Matrix / Aztec) and OCR fallback for already-cropped,
+Barcode decoding (QR / Micro QR / rMQR / Data Matrix / Aztec) and OCR fallback for already-cropped,
 already-straightened label images, as a standalone package. Takes crop
 *files* on disk as input (e.g. the crops written by `../image_crops`'s
 `POST /tasks`) — this package does no detection or geometry correction of
@@ -32,7 +32,7 @@ pip install -r requirements.txt
 | Name | From | Description |
 | --- | --- | --- |
 | `load_crop_entries` | `decoder.py` | Reads a list of crop image file paths from disk into `CropEntry` dicts (grayscale `gray` array + identity fields) |
-| `decode_crops` | `decoder.py` | Attempts a Data Matrix / Aztec decode on each entry's crop across a preprocessing ensemble (raw, CLAHE, upscaled, Otsu/adaptive threshold) |
+| `decode_crops` | `decoder.py` | Attempts a QR / Data Matrix / Aztec decode on each entry's crop across a preprocessing ensemble (raw, CLAHE, upscaled, Otsu/adaptive threshold) |
 | `ocr_failed_crops` | `decoder.py` | Runs OCR at all four right-angle rotations on decode failures, scoring each for the most plausible orientation and serial-number match |
 | `OCR_ENGINES` | `decoder.py` | `{"easyocr": ..., "ocrmac": ...}` factory map for the two supported OCR engines |
 | `CropEntry`, `OcrResult` | `entry.py` | `TypedDict`s describing the per-crop dict shape these functions read/mutate |
@@ -54,7 +54,7 @@ have a `"gray"` key (see `load_crop_entries`). For each entry:
 2. Tries a sequence of increasingly expensive preprocessing variants (raw →
    CLAHE → upscaled nearest/cubic → sharpened → Otsu threshold → adaptive
    threshold, plus inverted versions of the threshold steps), decoding each
-   with `zxingcpp.read_barcodes` (Data Matrix / Aztec formats).
+   with `zxingcpp.read_barcodes` (QR, Micro QR, rMQR, Data Matrix and Aztec formats; see `BARCODE_FORMATS` in `decoder.py`).
 3. On first success: stores the decoded text(s) in `entry["decoded"]`,
    records which method worked, and if the barcode reports an orientation,
    rotates the crop (in-memory and on-disk, if `entry["_crop_path"]` is set)
